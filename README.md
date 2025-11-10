@@ -1,6 +1,9 @@
 # EnvChanter
+<p align="center">
+   <img width="512" height="512" alt="EnvChanter" src="https://github.com/user-attachments/assets/54461e71-3030-4a32-98a1-9ec4999724da" />
+</p>
 
-envChanter is a lightweight command-line tool written in Go that reads parameters from AWS Systems Manager (SSM) Parameter Store and generates a `.env` file locally. It also supports pushing local environment variables to SSM, allowing development teams to securely store and manage centralized environment configuration in both directions.
+EnvChanter is a lightweight command-line tool written in Go that reads parameters from AWS Systems Manager (SSM) Parameter Store and generates a `.env` file locally. It also supports pushing local environment variables to SSM, allowing development teams to securely store and manage centralized environment configuration in both directions.
 
 ## Inspiration
 
