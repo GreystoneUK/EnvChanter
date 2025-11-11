@@ -2,8 +2,6 @@ name: Build and Release
 
 on:
   push:
-    branches:
-      - main
     tags:
       - 'v*'
   workflow_dispatch:
@@ -36,7 +34,7 @@ jobs:
         with:
           go-version: '1.21'
 
-      - name: Get version from tag
+      - name: Get version
         id: vers
         run: echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
 
@@ -45,7 +43,8 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          go build -o ${{ matrix.output }} -ldflags="-s -w -X 'main.version=${{ steps.vers.outputs.version }}'" .
+          go build -o ${{ matrix.output }} \
+            -ldflags "-s -w -X main.version=${{ steps.vers.outputs.version }}" .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

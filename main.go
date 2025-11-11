@@ -46,7 +46,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("EnvChanter v%s\n", version)
+		fmt.Printf("EnvChanter %s\n", version)
 		os.Exit(0)
 	}
 
