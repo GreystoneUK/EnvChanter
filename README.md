@@ -43,6 +43,23 @@ sudo mv envchanter /usr/local/bin/envchanter
 
 Download `envchanter.exe` and add it to your PATH.
 
+#### macOS
+
+Download the appropriate binary for your Mac:
+
+- For Apple Silicon (M1/M2/M3): `envchanter-macos-arm64`
+
+```bash
+# Download the binary (example for Apple Silicon)
+curl -LO https://github.com/GreystoneUK/EnvChanter/releases/latest/download/envchanter-macos-arm64
+
+# Make it executable
+chmod +x envchanter-macos-arm64
+
+# Move to your PATH (optional)
+sudo mv envchanter-macos-arm64 /usr/local/bin/envchanter
+```
+
 ### Build from Source
 
 Requirements:
@@ -112,6 +129,31 @@ EnvChanter supports two modes of operation:
 
 - **Pull mode** (default): Fetch parameters from AWS SSM and generate a local `.env` file
 - **Push mode**: Upload local environment variables to AWS SSM Parameter Store
+
+### Command-Line Options
+
+```bash
+  -map string
+        Path to JSON file mapping env vars to SSM parameter paths
+  -env string
+        Path to .env file (for pull: output file, for push: input file) (default ".env")
+  -profile string
+        AWS profile to use (uses default profile if not specified)
+  -region string
+        AWS region to use (uses default region if not specified)
+  -push
+        Push mode: upload local .env to SSM
+  -key string
+        Single environment variable name to push (only with --push)
+  -value string
+        Value of the single environment variable to push (only with --push)
+  -ssm-path string
+        SSM path for the single environment variable (only with --push)
+  -version
+        Show version information
+  -quotes
+        Quote values in the .env file output
+```
 
 ### Pull Mode: Generate .env from AWS SSM
 
@@ -191,29 +233,6 @@ You can also push a single parameter directly without using a mapping file:
 envchanter --push --key DB_PASSWORD --value "secret123" --ssm-path "/myapp/dev/db-password"
 ```
 
-### Command-Line Options
-
-```bash
-  -map string
-        Path to JSON file mapping env vars to SSM parameter paths
-  -env string
-        Path to .env file (for pull: output file, for push: input file) (default ".env")
-  -profile string
-        AWS profile to use (uses default profile if not specified)
-  -region string
-        AWS region to use (uses default region if not specified)
-  -push
-        Push mode: upload local .env to SSM
-  -key string
-        Single environment variable name to push (only with --push)
-  -value string
-        Value of the single environment variable to push (only with --push)
-  -ssm-path string
-        SSM path for the single environment variable (only with --push)
-  -version
-        Show version information
-```
-
 ### Examples
 
 #### Pull Mode Examples
@@ -283,6 +302,9 @@ envchanter --push --key API_KEY --value "secret123" --ssm-path "/myapp/dev/api-k
    /myapp/dev/database/password
    /myapp/prod/database/password
    /myapp/staging/api/key
+   /app001/dev/database/password
+   /app001/prod/database/password 
+   /app001/staging/api/key
    ```
 
 3. **Use SecureString type** - Always use SecureString for sensitive values in SSM
