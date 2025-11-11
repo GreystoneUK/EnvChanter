@@ -14,6 +14,7 @@ This project was inspired by [envilder](https://github.com/macalbert/envilder), 
 
 - 🔒 **Secure secret management** - Fetch secrets directly from AWS SSM Parameter Store
 - 📤 **Push mode** - Upload local .env files to AWS SSM Parameter Store
+- 🔄 **Sync mode** - Compare and update local .env files with AWS SSM values
 - 📝 **Simple mapping** - Define JSON mappings between environment variables and SSM paths
 - 🔐 **IAM-based access control** - Use AWS IAM policies to control who can access which parameters
 - 🌍 **Multi-profile support** - Support for multiple AWS profiles and regions
@@ -125,10 +126,11 @@ go build -o envchanter .
 
 ## Usage
 
-EnvChanter supports two modes of operation:
+EnvChanter supports three modes of operation:
 
 - **Pull mode** (default): Fetch parameters from AWS SSM and generate a local `.env` file
 - **Push mode**: Upload local environment variables to AWS SSM Parameter Store
+- **Sync mode**: Compare local `.env` with AWS SSM and update differences
 
 ### Command-Line Options
 
@@ -143,6 +145,10 @@ EnvChanter supports two modes of operation:
         AWS region to use (uses default region if not specified)
   -push
         Push mode: upload local .env to SSM
+  -sync
+        Sync mode: compare .env with SSM and update differences
+  -force
+        Force mode: update all differences without prompting (only with --sync)
   -key string
         Single environment variable name to push (only with --push)
   -value string
@@ -285,6 +291,81 @@ envchanter --push --key API_KEY --value "secret123" --ssm-path "/myapp/dev/api-k
 
 ```bash
 envchanter --push --key API_KEY --value "secret123" --ssm-path "/myapp/dev/api-key" --profile production
+```
+
+### Sync Mode: Compare and Update .env with AWS SSM
+
+Sync mode allows you to compare your local `.env` file with the current values stored in AWS SSM Parameter Store and selectively update your local file with the SSM values.
+
+#### Interactive Sync Mode
+
+This mode displays all differences and prompts you to update each parameter individually:
+
+```bash
+envchanter --sync --map param-map.json --env .env
+```
+
+When differences are found, you'll see output like:
+
+```
+Found 2 parameter(s) with differences:
+
+1. DB_PASSWORD
+   Local:  old_password
+   SSM:    new_password
+   Path:   /myapp/dev/db-password
+
+2. API_KEY
+   Local:  old_key
+   SSM:    new_key
+   Path:   /myapp/dev/api-key
+
+Update DB_PASSWORD (1/2)? [y]es/[n]o/[a]ll/[c]ancel: y
+Update API_KEY (2/2)? [y]es/[n]o/[a]ll/[c]ancel: n
+
+✓ Successfully updated .env with 1 parameter(s) from SSM
+```
+
+**Interactive Options:**
+- `y` or `yes` - Update this parameter
+- `n` or `no` - Skip this parameter
+- `a` or `all` - Update this and all remaining parameters
+- `c` or `cancel` - Cancel and exit without further updates
+
+#### Force Sync Mode
+
+Use the `--force` flag to automatically update all differing values without prompting:
+
+```bash
+envchanter --sync --force --map param-map.json --env .env
+```
+
+This is useful for automated scripts or CI/CD pipelines where you want to ensure your local `.env` is always in sync with SSM.
+
+#### Sync Mode Examples
+
+**Sync with specific AWS profile:**
+
+```bash
+envchanter --sync --map param-map.json --profile production
+```
+
+**Force sync with custom output file:**
+
+```bash
+envchanter --sync --force --map param-map.json --env .env.prod
+```
+
+**Sync with specific AWS region:**
+
+```bash
+envchanter --sync --map param-map.json --region us-west-2
+```
+
+**Combining sync options:**
+
+```bash
+envchanter --sync --force --map param-map.json --env .env.prod --profile production --region us-east-1
 ```
 
 ## Best Practices

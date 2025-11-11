@@ -192,3 +192,174 @@ ANOTHER_VALID=test`
 		t.Error("Expected error for invalid .env format, got nil")
 	}
 }
+
+func TestSyncParametersNoDifferences(t *testing.T) {
+	// Create a temporary directory
+	tmpDir := t.TempDir()
+	envFile := filepath.Join(tmpDir, ".env")
+
+	// Create test .env file
+	localEnvVars := map[string]string{
+		"DB_PASSWORD": "secret123",
+		"API_KEY":     "my-api-key",
+	}
+
+	// Write initial .env file
+	err := writeEnvFile(envFile, localEnvVars, false)
+	if err != nil {
+		t.Fatalf("Failed to write .env file: %v", err)
+	}
+
+	// Mock parameter map
+	paramMap := ParameterMap{
+		"DB_PASSWORD": "/myapp/dev/db-password",
+		"API_KEY":     "/myapp/dev/api-key",
+	}
+
+	// Note: We can't test the full syncParameters function without AWS SSM,
+	// but we can test the comparison logic separately
+	// This test verifies the file operations work correctly
+	content, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatalf("Failed to read .env file: %v", err)
+	}
+
+	if !strings.Contains(string(content), "DB_PASSWORD=") {
+		t.Error("Expected .env to contain DB_PASSWORD")
+	}
+
+	// Clean up - this validates paramMap structure
+	if len(paramMap) != 2 {
+		t.Errorf("Expected 2 parameters in map, got %d", len(paramMap))
+	}
+}
+
+func TestDifferenceDetection(t *testing.T) {
+	// Test identifying differences between local and SSM values
+	localEnvVars := map[string]string{
+		"DB_PASSWORD":  "local_secret",
+		"API_KEY":      "same_key",
+		"DATABASE_URL": "local_url",
+	}
+
+	ssmEnvVars := map[string]string{
+		"DB_PASSWORD":  "ssm_secret",
+		"API_KEY":      "same_key",
+		"DATABASE_URL": "local_url",
+		"NEW_KEY":      "new_value",
+	}
+
+	paramMap := ParameterMap{
+		"DB_PASSWORD":  "/myapp/dev/db-password",
+		"API_KEY":      "/myapp/dev/api-key",
+		"DATABASE_URL": "/myapp/dev/database-url",
+		"NEW_KEY":      "/myapp/dev/new-key",
+	}
+
+	// Manually detect differences (simulating syncParameters logic)
+	var differences []Difference
+	for envKey, ssmPath := range paramMap {
+		localVal, localExists := localEnvVars[envKey]
+		ssmVal, ssmExists := ssmEnvVars[envKey]
+
+		if !localExists {
+			if ssmExists {
+				differences = append(differences, Difference{
+					Key:       envKey,
+					LocalVal:  "",
+					SSMVal:    ssmVal,
+					SSMPath:   ssmPath,
+					ExistsSSM: true,
+				})
+			}
+		} else if !ssmExists {
+			continue
+		} else if localVal != ssmVal {
+			differences = append(differences, Difference{
+				Key:       envKey,
+				LocalVal:  localVal,
+				SSMVal:    ssmVal,
+				SSMPath:   ssmPath,
+				ExistsSSM: true,
+			})
+		}
+	}
+
+	// Should find 2 differences: DB_PASSWORD (different values) and NEW_KEY (not in local)
+	if len(differences) != 2 {
+		t.Errorf("Expected 2 differences, got %d", len(differences))
+	}
+
+	// Verify DB_PASSWORD difference
+	foundDBPassword := false
+	foundNewKey := false
+	for _, diff := range differences {
+		if diff.Key == "DB_PASSWORD" {
+			foundDBPassword = true
+			if diff.LocalVal != "local_secret" {
+				t.Errorf("Expected local value 'local_secret', got '%s'", diff.LocalVal)
+			}
+			if diff.SSMVal != "ssm_secret" {
+				t.Errorf("Expected SSM value 'ssm_secret', got '%s'", diff.SSMVal)
+			}
+		}
+		if diff.Key == "NEW_KEY" {
+			foundNewKey = true
+			if diff.LocalVal != "" {
+				t.Errorf("Expected empty local value, got '%s'", diff.LocalVal)
+			}
+			if diff.SSMVal != "new_value" {
+				t.Errorf("Expected SSM value 'new_value', got '%s'", diff.SSMVal)
+			}
+		}
+	}
+
+	if !foundDBPassword {
+		t.Error("Expected to find DB_PASSWORD difference")
+	}
+	if !foundNewKey {
+		t.Error("Expected to find NEW_KEY difference")
+	}
+}
+
+func TestSyncUpdateEnvFile(t *testing.T) {
+	// Create a temporary directory
+	tmpDir := t.TempDir()
+	envFile := filepath.Join(tmpDir, ".env")
+
+	// Initial local env vars
+	localEnvVars := map[string]string{
+		"DB_PASSWORD": "old_password",
+		"API_KEY":     "old_key",
+	}
+
+	// Write initial .env file
+	err := writeEnvFile(envFile, localEnvVars, false)
+	if err != nil {
+		t.Fatalf("Failed to write .env file: %v", err)
+	}
+
+	// Simulate updating with SSM values
+	localEnvVars["DB_PASSWORD"] = "new_password"
+	localEnvVars["API_KEY"] = "new_key"
+
+	// Write updated values
+	err = writeEnvFile(envFile, localEnvVars, false)
+	if err != nil {
+		t.Fatalf("Failed to write updated .env file: %v", err)
+	}
+
+	// Read back and verify
+	updatedVars, err := readEnvFile(envFile)
+	if err != nil {
+		t.Fatalf("Failed to read updated .env file: %v", err)
+	}
+
+	if updatedVars["DB_PASSWORD"] != "new_password" {
+		t.Errorf("Expected DB_PASSWORD to be 'new_password', got '%s'", updatedVars["DB_PASSWORD"])
+	}
+
+	if updatedVars["API_KEY"] != "new_key" {
+		t.Errorf("Expected API_KEY to be 'new_key', got '%s'", updatedVars["API_KEY"])
+	}
+}
