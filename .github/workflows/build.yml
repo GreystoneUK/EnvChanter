@@ -6,9 +6,6 @@ on:
       - main
     tags:
       - 'v*'
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:
@@ -20,13 +17,16 @@ jobs:
     strategy:
       matrix:
         include:
-          - goos: linux
-            goarch: amd64
-            output: envchanter
-          - goos: windows
-            goarch: amd64
-            output: envchanter.exe
-    
+        - goos: linux
+          goarch: amd64
+          output: envchanter
+        - goos: windows
+          goarch: amd64
+          output: envchanter.exe
+        - goos: darwin
+          goarch: arm64
+          output: envchanter-macos-arm64
+  
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -72,11 +72,17 @@ jobs:
         with:
           name: envchanter.exe
 
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: envchanter-macos-arm64
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
             envchanter
             envchanter.exe
+            envchanter-macos-arm64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
