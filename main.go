@@ -14,7 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 )
 
-const version = "1.0.6"
+const version = "dev"
 
 const asciiArt = `
 ███████╗███╗   ██╗██╗   ██╗ ██████╗██╗  ██╗ █████╗ ███╗   ██╗████████╗███████╗██████╗ 
