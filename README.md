@@ -8,7 +8,7 @@ EnvChanter is a lightweight command-line tool written in Go that reads parameter
 
 ## Inspiration
 
-This project was inspired by [envilder](https://github.com/macalbert/envilder), a TypeScript-based tool with similar functionality. EnvChanter provides a Go implementation with cross-platform binaries.
+This project was inspired by [envilder](https://github.com/macalbert/envilder), a TypeScript-based tool. EnvChanter provides a Go implementation with cross-platform binaries.
 
 ## Features
 
