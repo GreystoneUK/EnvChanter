@@ -38,6 +38,8 @@ func main() {
 	region := flag.String("region", "", "AWS region to use")
 	showVersion := flag.Bool("version", false, "Show version information")
 	push := flag.Bool("push", false, "Push mode: upload local .env to SSM")
+	sync := flag.Bool("sync", false, "Sync mode: compare .env with SSM and update differences")
+	force := flag.Bool("force", false, "Force mode: update all differences without prompting (only with --sync)")
 	key := flag.String("key", "", "Single environment variable name to push (only with --push)")
 	value := flag.String("value", "", "Value of the single environment variable to push (only with --push)")
 	ssmPath := flag.String("ssm-path", "", "SSM path for the single environment variable (only with --push)")
@@ -51,6 +53,13 @@ func main() {
 	}
 
 	// Validate flags based on mode
+	if *push && *sync {
+		fmt.Println("Error: Cannot use --push and --sync together")
+		fmt.Println("\nUsage:")
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
+
 	if *push {
 		// Push mode validation
 		if *key != "" || *value != "" || *ssmPath != "" {
@@ -69,6 +78,14 @@ func main() {
 				flag.PrintDefaults()
 				os.Exit(1)
 			}
+		}
+	} else if *sync {
+		// Sync mode validation
+		if *mapFile == "" || *envFile == "" {
+			fmt.Println("Error: For sync mode, both --map and --env are required")
+			fmt.Println("\nUsage:")
+			flag.PrintDefaults()
+			os.Exit(1)
 		}
 	} else {
 		// Pull mode validation (existing behavior)
@@ -121,6 +138,25 @@ func main() {
 				os.Exit(1)
 			}
 			fmt.Printf("Successfully pushed %d parameters to SSM\n", len(envVars))
+		}
+	} else if *sync {
+		// Sync mode
+		paramMap, err := loadParameterMap(*mapFile)
+		if err != nil {
+			fmt.Printf("Error loading parameter map: %v\n", err)
+			os.Exit(1)
+		}
+
+		localEnvVars, err := readEnvFile(*envFile)
+		if err != nil {
+			fmt.Printf("Error reading .env file: %v\n", err)
+			os.Exit(1)
+		}
+
+		err = syncParameters(ctx, ssmClient, localEnvVars, paramMap, *envFile, *force, *quotes)
+		if err != nil {
+			fmt.Printf("Error syncing parameters: %v\n", err)
+			os.Exit(1)
 		}
 	} else {
 		// Pull mode (existing behavior)
@@ -351,4 +387,151 @@ func pushParameters(ctx context.Context, client *ssm.Client, envVars map[string]
 	}
 
 	return nil
+}
+
+// Difference represents a parameter that differs between local and SSM
+type Difference struct {
+	Key       string
+	LocalVal  string
+	SSMVal    string
+	SSMPath   string
+	ExistsSSM bool
+}
+
+// syncParameters compares local .env with SSM values and updates the .env file
+func syncParameters(ctx context.Context, client *ssm.Client, localEnvVars map[string]string, paramMap ParameterMap, envFile string, force bool, quotes bool) error {
+	// Fetch current values from SSM
+	ssmEnvVars, err := fetchParameters(ctx, client, paramMap)
+	if err != nil {
+		return fmt.Errorf("failed to fetch SSM parameters: %w", err)
+	}
+
+	// Compare local and SSM values
+	var differences []Difference
+	for envKey, ssmPath := range paramMap {
+		localVal, localExists := localEnvVars[envKey]
+		ssmVal, ssmExists := ssmEnvVars[envKey]
+
+		// Check if there's a difference
+		if !localExists {
+			// Local doesn't have this key, but SSM does
+			if ssmExists {
+				differences = append(differences, Difference{
+					Key:       envKey,
+					LocalVal:  "",
+					SSMVal:    ssmVal,
+					SSMPath:   ssmPath,
+					ExistsSSM: true,
+				})
+			}
+		} else if !ssmExists {
+			// Local has the key but SSM doesn't - skip this
+			continue
+		} else if localVal != ssmVal {
+			// Both exist but values differ
+			differences = append(differences, Difference{
+				Key:       envKey,
+				LocalVal:  localVal,
+				SSMVal:    ssmVal,
+				SSMPath:   ssmPath,
+				ExistsSSM: true,
+			})
+		}
+	}
+
+	// If no differences found
+	if len(differences) == 0 {
+		fmt.Println("✓ All values are in sync. No updates needed.")
+		return nil
+	}
+
+	// Sort differences by key for consistent output
+	sort.Slice(differences, func(i, j int) bool {
+		return differences[i].Key < differences[j].Key
+	})
+
+	// Display differences
+	fmt.Printf("\nFound %d parameter(s) with differences:\n\n", len(differences))
+	for i, diff := range differences {
+		fmt.Printf("%d. %s\n", i+1, diff.Key)
+		if diff.LocalVal == "" {
+			fmt.Printf("   Local:  (not set)\n")
+		} else {
+			fmt.Printf("   Local:  %s\n", diff.LocalVal)
+		}
+		fmt.Printf("   SSM:    %s\n", diff.SSMVal)
+		fmt.Printf("   Path:   %s\n\n", diff.SSMPath)
+	}
+
+	// Determine which values to update
+	var toUpdate []Difference
+	if force {
+		// Force mode: update all differences
+		toUpdate = differences
+		fmt.Printf("Force mode enabled. Updating all %d parameter(s)...\n", len(toUpdate))
+	} else {
+		// Interactive mode: prompt for each difference
+		toUpdate, err = promptForUpdates(differences)
+		if err != nil {
+			return fmt.Errorf("error during prompting: %w", err)
+		}
+	}
+
+	if len(toUpdate) == 0 {
+		fmt.Println("No parameters selected for update.")
+		return nil
+	}
+
+	// Update local env vars with selected SSM values
+	for _, diff := range toUpdate {
+		localEnvVars[diff.Key] = diff.SSMVal
+	}
+
+	// Write updated values to .env file
+	err = writeEnvFile(envFile, localEnvVars, quotes)
+	if err != nil {
+		return fmt.Errorf("failed to write updated .env file: %w", err)
+	}
+
+	fmt.Printf("\n✓ Successfully updated %s with %d parameter(s) from SSM\n", envFile, len(toUpdate))
+	return nil
+}
+
+// promptForUpdates prompts the user to select which parameters to update
+func promptForUpdates(differences []Difference) ([]Difference, error) {
+	var toUpdate []Difference
+
+	for i, diff := range differences {
+		for {
+			fmt.Printf("Update %s (%d/%d)? [y]es/[n]o/[a]ll/[c]ancel: ", diff.Key, i+1, len(differences))
+
+			var response string
+			_, err := fmt.Scanln(&response)
+			if err != nil {
+				// Handle empty input
+				response = ""
+			}
+
+			response = strings.ToLower(strings.TrimSpace(response))
+
+			switch response {
+			case "y", "yes":
+				toUpdate = append(toUpdate, diff)
+				goto nextDiff
+			case "n", "no":
+				goto nextDiff
+			case "a", "all":
+				// Add current and all remaining differences
+				toUpdate = append(toUpdate, differences[i:]...)
+				return toUpdate, nil
+			case "c", "cancel":
+				return toUpdate, nil
+			default:
+				fmt.Println("Invalid input. Please enter y(es), n(o), a(ll), or c(ancel).")
+			}
+		}
+	nextDiff:
+	}
+
+	return toUpdate, nil
 }
