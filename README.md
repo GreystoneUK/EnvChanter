@@ -400,6 +400,19 @@ envchanter --sync --force --map param-map.json --env .env.prod --profile product
 
 5. **IAM least privilege** - Grant only the minimum necessary permissions to access parameters
 
+## Security
+
+EnvChanter has undergone comprehensive security auditing and implements multiple security measures:
+
+- 🔒 **Secure file permissions** - .env files created with 0600 permissions (owner read/write only)
+- 🛡️ **Path traversal protection** - Input validation prevents directory traversal attacks
+- ✅ **Input validation** - All user inputs validated against secure patterns
+- 🔐 **Information disclosure prevention** - Error messages sanitized to avoid leaking sensitive data
+- 🚫 **Null byte injection protection** - File paths validated against null byte attacks
+- ✓ **CodeQL verified** - Passed static security analysis with zero vulnerabilities
+
+For detailed security information, incident reporting, and best practices, see [SECURITY.md](SECURITY.md).
+
 ## License
 
 MIT License - see the [LICENSE](LICENSE) file for details.
