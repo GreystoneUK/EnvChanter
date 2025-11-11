@@ -363,3 +363,167 @@ func TestSyncUpdateEnvFile(t *testing.T) {
 		t.Errorf("Expected API_KEY to be 'new_key', got '%s'", updatedVars["API_KEY"])
 	}
 }
+
+func TestValidateFilePath(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{"Valid simple path", ".env", false},
+		{"Valid path with directory", "config/.env", false},
+		{"Empty path", "", true},
+		{"Path traversal with ..", "../../../etc/passwd", true},
+		{"Path traversal in middle", "config/../../../etc/passwd", true},
+		{"Null byte injection", ".env\x00.txt", true},
+		{"Valid absolute path", "/tmp/test.env", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateFilePath(tt.path)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateFilePath(%q) error = %v, wantErr %v", tt.path, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateEnvVarName(t *testing.T) {
+	tests := []struct {
+		name    string
+		varName string
+		wantErr bool
+	}{
+		{"Valid uppercase", "DATABASE_URL", false},
+		{"Valid with numbers", "API_KEY_123", false},
+		{"Valid underscore", "MY_VAR_NAME", false},
+		{"Empty name", "", true},
+		{"Starts with digit", "123_VAR", true},
+		{"Contains space", "MY VAR", true},
+		{"Contains dash", "MY-VAR", true},
+		{"Contains special char", "MY$VAR", true},
+		{"Valid lowercase", "database_url", false},
+		{"Valid mixed case", "MyVarName", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateEnvVarName(tt.varName)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateEnvVarName(%q) error = %v, wantErr %v", tt.varName, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateSSMPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{"Valid simple path", "/myapp/dev/db-password", false},
+		{"Valid nested path", "/app/env/service/key", false},
+		{"Valid with numbers", "/app123/key456", false},
+		{"Valid with dash", "/my-app/my-key", false},
+		{"Valid with underscore", "/my_app/my_key", false},
+		{"Valid with dot", "/myapp/dev/key.value", false},
+		{"Empty path", "", true},
+		{"No leading slash", "myapp/dev/key", true},
+		{"Path traversal", "/myapp/../../../etc/passwd", true},
+		{"Contains space", "/my app/key", true},
+		{"Contains special char", "/myapp/key$value", true},
+		{"Too long path", "/" + strings.Repeat("a", 2048), true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateSSMPath(tt.path)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateSSMPath(%q) error = %v, wantErr %v", tt.path, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateParameterMap(t *testing.T) {
+	tests := []struct {
+		name     string
+		paramMap ParameterMap
+		wantErr  bool
+	}{
+		{
+			name: "Valid parameter map",
+			paramMap: ParameterMap{
+				"DB_PASSWORD": "/myapp/dev/db-password",
+				"API_KEY":     "/myapp/dev/api-key",
+			},
+			wantErr: false,
+		},
+		{
+			name:     "Empty parameter map",
+			paramMap: ParameterMap{},
+			wantErr:  true,
+		},
+		{
+			name: "Invalid env var name",
+			paramMap: ParameterMap{
+				"123_INVALID": "/myapp/dev/key",
+			},
+			wantErr: true,
+		},
+		{
+			name: "Invalid SSM path",
+			paramMap: ParameterMap{
+				"VALID_KEY": "missing-leading-slash",
+			},
+			wantErr: true,
+		},
+		{
+			name: "Path traversal in SSM path",
+			paramMap: ParameterMap{
+				"KEY": "/myapp/../../../etc/passwd",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateParameterMap(tt.paramMap)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateParameterMap() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestFilePermissions(t *testing.T) {
+	// Create a temporary directory
+	tmpDir := t.TempDir()
+	envFile := filepath.Join(tmpDir, ".env")
+
+	// Test data
+	envVars := map[string]string{
+		"SECRET_KEY": "sensitive_data",
+	}
+
+	// Write the .env file
+	err := writeEnvFile(envFile, envVars, false)
+	if err != nil {
+		t.Fatalf("Failed to write .env file: %v", err)
+	}
+
+	// Check file permissions
+	fileInfo, err := os.Stat(envFile)
+	if err != nil {
+		t.Fatalf("Failed to stat .env file: %v", err)
+	}
+
+	// File should have 0600 permissions (owner read/write only)
+	expectedPerm := os.FileMode(0600)
+	if fileInfo.Mode().Perm() != expectedPerm {
+		t.Errorf("Expected file permissions %v, got %v", expectedPerm, fileInfo.Mode().Perm())
+	}
+}

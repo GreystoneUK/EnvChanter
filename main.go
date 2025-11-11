@@ -27,6 +27,101 @@ const asciiArt = `
 
 type ParameterMap map[string]string
 
+// validateFilePath validates a file path to prevent path traversal attacks
+func validateFilePath(path string) error {
+	if path == "" {
+		return fmt.Errorf("empty file path")
+	}
+
+	// Check for path traversal attempts
+	cleanPath := strings.TrimSpace(path)
+	if strings.Contains(cleanPath, "..") {
+		return fmt.Errorf("path traversal detected")
+	}
+
+	// Check for null bytes
+	if strings.Contains(cleanPath, "\x00") {
+		return fmt.Errorf("null byte in file path")
+	}
+
+	return nil
+}
+
+// validateParameterMap validates the contents of a parameter map
+func validateParameterMap(paramMap ParameterMap) error {
+	if len(paramMap) == 0 {
+		return fmt.Errorf("parameter map is empty")
+	}
+
+	for envKey, ssmPath := range paramMap {
+		// Validate environment variable name
+		if err := validateEnvVarName(envKey); err != nil {
+			return fmt.Errorf("invalid environment variable name %q: %w", envKey, err)
+		}
+
+		// Validate SSM path
+		if err := validateSSMPath(ssmPath); err != nil {
+			return fmt.Errorf("invalid SSM path %q for key %q: %w", ssmPath, envKey, err)
+		}
+	}
+
+	return nil
+}
+
+// validateEnvVarName validates an environment variable name
+func validateEnvVarName(name string) error {
+	if name == "" {
+		return fmt.Errorf("empty environment variable name")
+	}
+
+	// Environment variable names should only contain alphanumeric characters and underscores
+	// and should not start with a digit
+	for i, char := range name {
+		if i == 0 && char >= '0' && char <= '9' {
+			return fmt.Errorf("environment variable name cannot start with a digit")
+		}
+		if !((char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || 
+			 (char >= '0' && char <= '9') || char == '_') {
+			return fmt.Errorf("environment variable name contains invalid character: %c", char)
+		}
+	}
+
+	return nil
+}
+
+// validateSSMPath validates an AWS SSM parameter path
+func validateSSMPath(path string) error {
+	if path == "" {
+		return fmt.Errorf("empty SSM path")
+	}
+
+	// SSM parameter names must start with /
+	if !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("SSM path must start with /")
+	}
+
+	// Check for invalid characters (AWS SSM allows alphanumeric, -, _, ., and /)
+	for _, char := range path {
+		if !((char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || 
+			 (char >= '0' && char <= '9') || char == '-' || char == '_' || 
+			 char == '.' || char == '/') {
+			return fmt.Errorf("SSM path contains invalid character: %c", char)
+		}
+	}
+
+	// Check for path traversal attempts
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("path traversal detected in SSM path")
+	}
+
+	// Check length (AWS SSM has a max path length of 2048 characters)
+	if len(path) > 2048 {
+		return fmt.Errorf("SSM path exceeds maximum length of 2048 characters")
+	}
+
+	return nil
+}
+
 func main() {
 	// Print ASCII artwork
 	fmt.Print(asciiArt)
@@ -111,6 +206,16 @@ func main() {
 	if *push {
 		// Push mode
 		if *key != "" {
+			// Validate key and SSM path before pushing
+			if err := validateEnvVarName(*key); err != nil {
+				fmt.Printf("Error: invalid environment variable name: %v\n", err)
+				os.Exit(1)
+			}
+			if err := validateSSMPath(*ssmPath); err != nil {
+				fmt.Printf("Error: invalid SSM path: %v\n", err)
+				os.Exit(1)
+			}
+
 			// Single parameter push
 			err = pushSingleParameter(ctx, ssmClient, *key, *value, *ssmPath)
 			if err != nil {
@@ -184,6 +289,11 @@ func main() {
 
 // loadParameterMap reads the JSON mapping file
 func loadParameterMap(filename string) (ParameterMap, error) {
+	// Validate filename to prevent path traversal
+	if err := validateFilePath(filename); err != nil {
+		return nil, fmt.Errorf("invalid file path: %w", err)
+	}
+
 	data, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
@@ -193,6 +303,11 @@ func loadParameterMap(filename string) (ParameterMap, error) {
 	err = json.Unmarshal(data, &paramMap)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse JSON: %w", err)
+	}
+
+	// Validate parameter map contents
+	if err := validateParameterMap(paramMap); err != nil {
+		return nil, fmt.Errorf("invalid parameter map: %w", err)
 	}
 
 	return paramMap, nil
@@ -232,11 +347,11 @@ func fetchParameters(ctx context.Context, client *ssm.Client, paramMap Parameter
 		if err != nil {
 			// If the error is ParameterNotFound, log a warning and continue
 			if strings.Contains(err.Error(), "ParameterNotFound") {
-				fmt.Printf("Warning: parameter not found for %s (%s), skipping.\n", envKey, ssmPath)
+				fmt.Printf("Warning: parameter not found for %s, skipping.\n", envKey)
 				continue
 			}
-			// For other errors, fail
-			return nil, fmt.Errorf("failed to get parameter %s: %w", ssmPath, err)
+			// For other errors, fail without exposing the path
+			return nil, fmt.Errorf("failed to get parameter for %s: %w", envKey, err)
 		}
 
 		if result.Parameter != nil && result.Parameter.Value != nil {
@@ -249,8 +364,13 @@ func fetchParameters(ctx context.Context, client *ssm.Client, paramMap Parameter
 
 // writeEnvFile writes environment variables to a .env file
 func writeEnvFile(filename string, envVars map[string]string, alwaysQuote bool) error {
-	// Create file
-	file, err := os.Create(filename)
+	// Validate filename to prevent path traversal
+	if err := validateFilePath(filename); err != nil {
+		return fmt.Errorf("invalid file path: %w", err)
+	}
+
+	// Create file with restrictive permissions (0600 = owner read/write only)
+	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to create file: %w", err)
 	}
@@ -302,6 +422,11 @@ func boolPtr(b bool) *bool {
 
 // readEnvFile reads a .env file and returns environment variables as a map
 func readEnvFile(filename string) (map[string]string, error) {
+	// Validate filename to prevent path traversal
+	if err := validateFilePath(filename); err != nil {
+		return nil, fmt.Errorf("invalid file path: %w", err)
+	}
+
 	data, err := os.ReadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
@@ -358,7 +483,7 @@ func pushSingleParameter(ctx context.Context, client *ssm.Client, key, value, ss
 
 	_, err := client.PutParameter(ctx, input)
 	if err != nil {
-		return fmt.Errorf("failed to put parameter %s: %w", ssmPath, err)
+		return fmt.Errorf("failed to put parameter: %w", err)
 	}
 
 	return nil
@@ -382,7 +507,7 @@ func pushParameters(ctx context.Context, client *ssm.Client, envVars map[string]
 
 		_, err := client.PutParameter(ctx, input)
 		if err != nil {
-			return fmt.Errorf("failed to put parameter %s (%s): %w", envKey, ssmPath, err)
+			return fmt.Errorf("failed to put parameter %s: %w", envKey, err)
 		}
 	}
 
