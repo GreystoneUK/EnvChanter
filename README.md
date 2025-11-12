@@ -99,7 +99,7 @@ go build -o envchanter .
            "ssm:GetParameter",
            "ssm:GetParameters"
          ],
-         "Resource": "arn:aws:ssm:REGION:ACCOUNT_ID:parameter/your-app/*"
+         "Resource": "arn:aws:ssm:REGION:ACCOUNT_ID:parameter/app001/*"
        }
      ]
    }
@@ -118,7 +118,7 @@ go build -o envchanter .
            "ssm:GetParameters",
            "ssm:PutParameter"
          ],
-         "Resource": "arn:aws:ssm:REGION:ACCOUNT_ID:parameter/your-app/*"
+         "Resource": "arn:aws:ssm:REGION:ACCOUNT_ID:parameter/app001/*"
        }
      ]
    }
@@ -170,25 +170,25 @@ First, create your parameters in AWS SSM Parameter Store:
 ```bash
 # Using AWS CLI
 aws ssm put-parameter \
-  --name "/myapp/dev/db-password" \
+  --name "/app001/test/db-password" \
   --value "your-secret-password" \
   --type "SecureString"
 
 aws ssm put-parameter \
-  --name "/myapp/dev/api-key" \
+  --name "/app001/test/api-key" \
   --value "your-api-key" \
   --type "SecureString"
 ```
 
 #### 2. Create a Parameter Mapping File
 
-Create a JSON file (e.g., `param-map.json`) that maps environment variable names to SSM parameter paths:
+Create a JSON file (e.g., `envchanter.prod.json`) that maps environment variable names to SSM parameter paths:
 
 ```json
 {
-  "DB_PASSWORD": "/myapp/dev/db-password",
-  "API_KEY": "/myapp/dev/api-key",
-  "DATABASE_URL": "/myapp/dev/database-url"
+  "DB_PASSWORD": "/app001/test/db-password",
+  "API_KEY": "/app001/test/api-key",
+  "DATABASE_URL": "/app001/test/database-url"
 }
 ```
 
@@ -197,7 +197,7 @@ Create a JSON file (e.g., `param-map.json`) that maps environment variable names
 Run EnvChanter to fetch parameters and generate your `.env` file:
 
 ```bash
-envchanter --map param-map.json --env .env
+envchanter --map envchanter.prod.json --env .env
 ```
 
 This will create a `.env` file with the values from SSM:
@@ -226,7 +226,7 @@ DATABASE_URL=postgresql://localhost:5432/mydb
 Then push them to AWS SSM using your mapping file:
 
 ```bash
-envchanter --push --map param-map.json --env .env
+envchanter --push --map envchanter.prod.json --env .env
 ```
 
 This will upload each variable to its corresponding SSM path defined in the mapping file.
@@ -236,7 +236,7 @@ This will upload each variable to its corresponding SSM path defined in the mapp
 You can also push a single parameter directly without using a mapping file:
 
 ```bash
-envchanter --push --key DB_PASSWORD --value "secret123" --ssm-path "/myapp/dev/db-password"
+envchanter --push --key DB_PASSWORD --value "secret123" --ssm-path "/app001/test/db-password"
 ```
 
 ### Examples
@@ -246,25 +246,25 @@ envchanter --push --key DB_PASSWORD --value "secret123" --ssm-path "/myapp/dev/d
 **Using a specific AWS profile:**
 
 ```bash
-envchanter --map param-map.json --profile production
+envchanter --map envchanter.prod.json --profile production
 ```
 
 **Using a specific AWS region:**
 
 ```bash
-envchanter --map param-map.json --region us-west-2
+envchanter --map envchanter.prod.json --region eu-west-1
 ```
 
 **Custom output file:**
 
 ```bash
-envchanter --map param-map.json --env .env.local
+envchanter --map envchanter.prod.json --env .env.local
 ```
 
 **Combining options:**
 
 ```bash
-envchanter --map param-map.json --env .env.prod --profile production --region us-east-1
+envchanter --map envchanter.prod.json --env .env.prod --profile production --region eu-west-1
 ```
 
 #### Push Mode Examples
@@ -272,25 +272,25 @@ envchanter --map param-map.json --env .env.prod --profile production --region us
 **Push from .env file (multiple variables):**
 
 ```bash
-envchanter --push --map param-map.json --env .env
+envchanter --push --map envchanter.prod.json --env .env
 ```
 
 **Push with specific AWS profile:**
 
 ```bash
-envchanter --push --map param-map.json --env .env.prod --profile production
+envchanter --push --map envchanter.prod.json --env .env.prod --profile production
 ```
 
 **Push a single parameter:**
 
 ```bash
-envchanter --push --key API_KEY --value "secret123" --ssm-path "/myapp/dev/api-key"
+envchanter --push --key API_KEY --value "secret123" --ssm-path "/app001/test/api-key"
 ```
 
 **Push single parameter with AWS profile:**
 
 ```bash
-envchanter --push --key API_KEY --value "secret123" --ssm-path "/myapp/dev/api-key" --profile production
+envchanter --push --key API_KEY --value "secret123" --ssm-path "/app001/test/api-key" --profile production
 ```
 
 ### Sync Mode: Compare and Update .env with AWS SSM
@@ -302,7 +302,7 @@ Sync mode allows you to compare your local `.env` file with the current values s
 This mode displays all differences and prompts you to update each parameter individually:
 
 ```bash
-envchanter --sync --map param-map.json --env .env
+envchanter --sync --map envchanter.prod.json --env .env
 ```
 
 When differences are found, you'll see output like:
@@ -313,12 +313,12 @@ Found 2 parameter(s) with differences:
 1. DB_PASSWORD
    Local:  old_password
    SSM:    new_password
-   Path:   /myapp/dev/db-password
+   Path:   /app001/test/db-password
 
 2. API_KEY
    Local:  old_key
    SSM:    new_key
-   Path:   /myapp/dev/api-key
+   Path:   /app001/test/api-key
 
 Update DB_PASSWORD (1/2)? [y]es/[n]o/[a]ll/[c]ancel: y
 Update API_KEY (2/2)? [y]es/[n]o/[a]ll/[c]ancel: n
@@ -327,6 +327,7 @@ Update API_KEY (2/2)? [y]es/[n]o/[a]ll/[c]ancel: n
 ```
 
 **Interactive Options:**
+
 - `y` or `yes` - Update this parameter
 - `n` or `no` - Skip this parameter
 - `a` or `all` - Update this and all remaining parameters
@@ -337,7 +338,7 @@ Update API_KEY (2/2)? [y]es/[n]o/[a]ll/[c]ancel: n
 Use the `--force` flag to automatically update all differing values without prompting:
 
 ```bash
-envchanter --sync --force --map param-map.json --env .env
+envchanter --sync --force --map envchanter.prod.json --env .env
 ```
 
 This is useful for automated scripts or CI/CD pipelines where you want to ensure your local `.env` is always in sync with SSM.
@@ -347,25 +348,25 @@ This is useful for automated scripts or CI/CD pipelines where you want to ensure
 **Sync with specific AWS profile:**
 
 ```bash
-envchanter --sync --map param-map.json --profile production
+envchanter --sync --map envchanter.prod.json --profile production
 ```
 
 **Force sync with custom output file:**
 
 ```bash
-envchanter --sync --force --map param-map.json --env .env.prod
+envchanter --sync --force --map envchanter.prod.json --env .env.prod
 ```
 
 **Sync with specific AWS region:**
 
 ```bash
-envchanter --sync --map param-map.json --region us-west-2
+envchanter --sync --map envchanter.prod.json --region us-west-2
 ```
 
 **Combining sync options:**
 
 ```bash
-envchanter --sync --force --map param-map.json --env .env.prod --profile production --region us-east-1
+envchanter --sync --force --map envchanter.prod.json --env .env.prod --profile production --region us-east-1
 ```
 
 ## Best Practices
@@ -380,12 +381,12 @@ envchanter --sync --force --map param-map.json --env .env.prod --profile product
 2. **Use hierarchical paths** - Organize your parameters with a clear hierarchy
 
    ```bash
-   /myapp/dev/database/password
-   /myapp/prod/database/password
-   /myapp/staging/api/key
-   /app001/dev/database/password
-   /app001/prod/database/password 
+   /app001/test/database/password
+   /app001/prod/database/password
    /app001/staging/api/key
+   /app002/test/database/password
+   /app002/prod/database/password 
+   /app002/staging/api/key
    ```
 
 3. **Use SecureString type** - Always use SecureString for sensitive values in SSM
@@ -393,9 +394,9 @@ envchanter --sync --force --map param-map.json --env .env.prod --profile product
 4. **Separate mapping files** - Use different mapping files for different environments
 
    ```bash
-   param-map.dev.json
-   param-map.staging.json
-   param-map.prod.json
+   envchanter.dev.json
+   envchanter.test.json
+   envchanter.prod.json
    ```
 
 5. **IAM least privilege** - Grant only the minimum necessary permissions to access parameters
