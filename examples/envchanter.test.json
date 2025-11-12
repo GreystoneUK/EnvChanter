@@ -1,0 +1,5 @@
+{
+  "DB_PASSWORD": "/myapp/test/db-password",
+  "API_KEY": "/myapp/test/api-key",
+  "DATABASE_URL": "/myapp/test/database-url"
+}

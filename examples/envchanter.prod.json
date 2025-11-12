@@ -1,0 +1,5 @@
+{
+  "DB_PASSWORD": "/myapp/prod/db-password",
+  "API_KEY": "/myapp/prod/api-key",
+  "DATABASE_URL": "/myapp/prod/database-url"
+}
