@@ -211,6 +211,141 @@ func fetchParametersFromAzure(ctx context.Context, client *azsecrets.Client, par
 	return envVars, nil
 }
 
+// pushSingleParameterToAzure pushes a single parameter to Azure Key Vault
+func pushSingleParameterToAzure(ctx context.Context, client *azsecrets.Client, key, value, secretName string) error {
+	params := azsecrets.SetSecretParameters{
+		Value: &value,
+	}
+
+	_, err := client.SetSecret(ctx, secretName, params, nil)
+	if err != nil {
+		return fmt.Errorf("failed to set secret: %w", err)
+	}
+
+	return nil
+}
+
+// pushParametersToAzure pushes multiple parameters to Azure Key Vault based on mapping
+func pushParametersToAzure(ctx context.Context, client *azsecrets.Client, envVars map[string]string, paramMap ParameterMap) error {
+	for envKey, secretName := range paramMap {
+		value, exists := envVars[envKey]
+		if !exists {
+			// Skip parameters that don't exist in the .env file
+			continue
+		}
+
+		params := azsecrets.SetSecretParameters{
+			Value: &value,
+		}
+
+		_, err := client.SetSecret(ctx, secretName, params, nil)
+		if err != nil {
+			return fmt.Errorf("failed to set secret %s: %w", envKey, err)
+		}
+	}
+
+	return nil
+}
+
+// syncParametersWithAzure compares local .env with Azure Key Vault values and updates the .env file
+func syncParametersWithAzure(ctx context.Context, client *azsecrets.Client, localEnvVars map[string]string, paramMap ParameterMap, envFile string, force bool, quotes bool) error {
+	// Fetch current values from Azure Key Vault
+	azureEnvVars, err := fetchParametersFromAzure(ctx, client, paramMap)
+	if err != nil {
+		return fmt.Errorf("failed to fetch Azure Key Vault secrets: %w", err)
+	}
+
+	// Compare local and Azure values
+	var differences []Difference
+	for envKey, secretName := range paramMap {
+		localVal, localExists := localEnvVars[envKey]
+		azureVal, azureExists := azureEnvVars[envKey]
+
+		// Check if there's a difference
+		if !localExists {
+			// Local doesn't have this key, but Azure does
+			if azureExists {
+				differences = append(differences, Difference{
+					Key:       envKey,
+					LocalVal:  "",
+					SSMVal:    azureVal,
+					SSMPath:   secretName,
+					ExistsSSM: true,
+				})
+			}
+		} else if !azureExists {
+			// Local has the key but Azure doesn't - skip this
+			continue
+		} else if localVal != azureVal {
+			// Both exist but values differ
+			differences = append(differences, Difference{
+				Key:       envKey,
+				LocalVal:  localVal,
+				SSMVal:    azureVal,
+				SSMPath:   secretName,
+				ExistsSSM: true,
+			})
+		}
+	}
+
+	// If no differences found
+	if len(differences) == 0 {
+		fmt.Println("✓ All values are in sync. No updates needed.")
+		return nil
+	}
+
+	// Sort differences by key for consistent output
+	sort.Slice(differences, func(i, j int) bool {
+		return differences[i].Key < differences[j].Key
+	})
+
+	// Display differences
+	fmt.Printf("\nFound %d secret(s) with differences:\n\n", len(differences))
+	for i, diff := range differences {
+		fmt.Printf("%d. %s\n", i+1, diff.Key)
+		if diff.LocalVal == "" {
+			fmt.Printf("   Local:  (not set)\n")
+		} else {
+			fmt.Printf("   Local:  %s\n", diff.LocalVal)
+		}
+		fmt.Printf("   Azure:  %s\n", diff.SSMVal)
+		fmt.Printf("   Name:   %s\n\n", diff.SSMPath)
+	}
+
+	// Determine which values to update
+	var toUpdate []Difference
+	if force {
+		// Force mode: update all differences
+		toUpdate = differences
+		fmt.Printf("Force mode enabled. Updating all %d secret(s)...\n", len(toUpdate))
+	} else {
+		// Interactive mode: prompt for each difference
+		toUpdate, err = promptForUpdates(differences)
+		if err != nil {
+			return fmt.Errorf("error during prompting: %w", err)
+		}
+	}
+
+	if len(toUpdate) == 0 {
+		fmt.Println("No secrets selected for update.")
+		return nil
+	}
+
+	// Update local env vars with selected Azure values
+	for _, diff := range toUpdate {
+		localEnvVars[diff.Key] = diff.SSMVal
+	}
+
+	// Write updated values to .env file
+	err = writeEnvFile(envFile, localEnvVars, quotes)
+	if err != nil {
+		return fmt.Errorf("failed to write updated .env file: %w", err)
+	}
+
+	fmt.Printf("\n✓ Successfully updated %s with %d secret(s) from Azure Key Vault\n", envFile, len(toUpdate))
+	return nil
+}
+
 func main() {
 	// Print ASCII artwork
 	fmt.Print(asciiArt)
@@ -226,7 +361,8 @@ func main() {
 	force := flag.Bool("force", false, "Force mode: update all differences without prompting (only with --sync)")
 	key := flag.String("key", "", "Single environment variable name to push (only with --push)")
 	value := flag.String("value", "", "Value of the single environment variable to push (only with --push)")
-	ssmPath := flag.String("ssm-path", "", "SSM path for the single environment variable (only with --push)")
+	ssmPath := flag.String("ssm-path", "", "SSM path for the single environment variable (only with --push and AWS)")
+	secretName := flag.String("secret-name", "", "Azure Key Vault secret name for the single environment variable (only with --push and --azure)")
 	quotes := flag.Bool("quotes", false, "Always quote values in the .env file output")
 	azure := flag.Bool("azure", false, "Use Azure Key Vault instead of AWS SSM")
 	vaultName := flag.String("vault-name", "", "Azure Key Vault name (required with --azure)")
@@ -254,23 +390,28 @@ func main() {
 			flag.PrintDefaults()
 			os.Exit(1)
 		}
-		if *push || *sync {
-			fmt.Println("Error: Azure mode currently only supports pull operations")
-			fmt.Println("\nUsage:")
-			flag.PrintDefaults()
-			os.Exit(1)
-		}
 	}
 
 	if *push {
 		// Push mode validation
-		if *key != "" || *value != "" || *ssmPath != "" {
+		if *key != "" || *value != "" || *ssmPath != "" || *secretName != "" {
 			// Single parameter push mode
-			if *key == "" || *value == "" || *ssmPath == "" {
-				fmt.Println("Error: For single parameter push, all of --key, --value, and --ssm-path are required")
-				fmt.Println("\nUsage:")
-				flag.PrintDefaults()
-				os.Exit(1)
+			if *azure {
+				// Azure single parameter push
+				if *key == "" || *value == "" || *secretName == "" {
+					fmt.Println("Error: For Azure single parameter push, all of --key, --value, and --secret-name are required")
+					fmt.Println("\nUsage:")
+					flag.PrintDefaults()
+					os.Exit(1)
+				}
+			} else {
+				// AWS single parameter push
+				if *key == "" || *value == "" || *ssmPath == "" {
+					fmt.Println("Error: For AWS single parameter push, all of --key, --value, and --ssm-path are required")
+					fmt.Println("\nUsage:")
+					flag.PrintDefaults()
+					os.Exit(1)
+				}
 			}
 		} else {
 			// File-based push mode
@@ -303,14 +444,6 @@ func main() {
 
 	// Handle Azure mode
 	if *azure {
-		// Azure pull mode (only mode supported)
-		if *mapFile == "" {
-			fmt.Println("Error: --map flag is required")
-			fmt.Println("\nUsage:")
-			flag.PrintDefaults()
-			os.Exit(1)
-		}
-
 		// Create Azure client
 		azureClient, err := createAzureClient(ctx, *vaultName)
 		if err != nil {
@@ -318,34 +451,108 @@ func main() {
 			os.Exit(1)
 		}
 
-		// Load parameter map without validation
-		paramMap, err := loadParameterMapRaw(*mapFile)
-		if err != nil {
-			fmt.Printf("Error loading parameter map: %v\n", err)
-			os.Exit(1)
-		}
+		if *push {
+			// Azure push mode
+			if *key != "" {
+				// Validate key and secret name before pushing
+				if err := validateEnvVarName(*key); err != nil {
+					fmt.Printf("Error: invalid environment variable name: %v\n", err)
+					os.Exit(1)
+				}
+				if err := validateAzureSecretName(*secretName); err != nil {
+					fmt.Printf("Error: invalid Azure secret name: %v\n", err)
+					os.Exit(1)
+				}
 
-		// Validate parameter map for Azure
-		if err := validateAzureParameterMap(paramMap); err != nil {
-			fmt.Printf("Error: invalid parameter map: %v\n", err)
-			os.Exit(1)
-		}
+				// Single parameter push to Azure
+				err = pushSingleParameterToAzure(ctx, azureClient, *key, *value, *secretName)
+				if err != nil {
+					fmt.Printf("Error pushing secret: %v\n", err)
+					os.Exit(1)
+				}
+				fmt.Printf("Successfully pushed %s to Azure Key Vault secret %s\n", *key, *secretName)
+			} else {
+				// File-based push to Azure
+				paramMap, err := loadParameterMapRaw(*mapFile)
+				if err != nil {
+					fmt.Printf("Error loading parameter map: %v\n", err)
+					os.Exit(1)
+				}
 
-		// Fetch secrets from Azure
-		envVars, err := fetchParametersFromAzure(ctx, azureClient, paramMap)
-		if err != nil {
-			fmt.Printf("Error fetching secrets: %v\n", err)
-			os.Exit(1)
-		}
+				// Validate parameter map for Azure
+				if err := validateAzureParameterMap(paramMap); err != nil {
+					fmt.Printf("Error: invalid parameter map: %v\n", err)
+					os.Exit(1)
+				}
 
-		// Write .env file
-		err = writeEnvFile(*envFile, envVars, *quotes)
-		if err != nil {
-			fmt.Printf("Error writing .env file: %v\n", err)
-			os.Exit(1)
-		}
+				envVars, err := readEnvFile(*envFile)
+				if err != nil {
+					fmt.Printf("Error reading .env file: %v\n", err)
+					os.Exit(1)
+				}
 
-		fmt.Printf("Successfully generated %s with %d secrets from Azure Key Vault\n", *envFile, len(envVars))
+				err = pushParametersToAzure(ctx, azureClient, envVars, paramMap)
+				if err != nil {
+					fmt.Printf("Error pushing secrets: %v\n", err)
+					os.Exit(1)
+				}
+				fmt.Printf("Successfully pushed %d secrets to Azure Key Vault\n", len(envVars))
+			}
+		} else if *sync {
+			// Azure sync mode
+			paramMap, err := loadParameterMapRaw(*mapFile)
+			if err != nil {
+				fmt.Printf("Error loading parameter map: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Validate parameter map for Azure
+			if err := validateAzureParameterMap(paramMap); err != nil {
+				fmt.Printf("Error: invalid parameter map: %v\n", err)
+				os.Exit(1)
+			}
+
+			localEnvVars, err := readEnvFile(*envFile)
+			if err != nil {
+				fmt.Printf("Error reading .env file: %v\n", err)
+				os.Exit(1)
+			}
+
+			err = syncParametersWithAzure(ctx, azureClient, localEnvVars, paramMap, *envFile, *force, *quotes)
+			if err != nil {
+				fmt.Printf("Error syncing secrets: %v\n", err)
+				os.Exit(1)
+			}
+		} else {
+			// Azure pull mode
+			paramMap, err := loadParameterMapRaw(*mapFile)
+			if err != nil {
+				fmt.Printf("Error loading parameter map: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Validate parameter map for Azure
+			if err := validateAzureParameterMap(paramMap); err != nil {
+				fmt.Printf("Error: invalid parameter map: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Fetch secrets from Azure
+			envVars, err := fetchParametersFromAzure(ctx, azureClient, paramMap)
+			if err != nil {
+				fmt.Printf("Error fetching secrets: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Write .env file
+			err = writeEnvFile(*envFile, envVars, *quotes)
+			if err != nil {
+				fmt.Printf("Error writing .env file: %v\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Printf("Successfully generated %s with %d secrets from Azure Key Vault\n", *envFile, len(envVars))
+		}
 		return
 	}
 

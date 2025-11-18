@@ -4,7 +4,7 @@
    <img width="512" height="512" alt="EnvChanter_WhiteBackGround" src="https://github.com/user-attachments/assets/0392af46-75c3-4398-9790-5f2121756d02" />
 </p>
 
-EnvChanter is a lightweight command-line tool written in Go that reads parameters from AWS Systems Manager (SSM) Parameter Store or Azure Key Vault and generates a `.env` file locally. It also supports pushing local environment variables to AWS SSM, allowing development teams to securely store and manage centralized environment configuration in both directions.
+EnvChanter is a lightweight command-line tool written in Go that reads parameters from AWS Systems Manager (SSM) Parameter Store or Azure Key Vault and generates a `.env` file locally. It also supports pushing local environment variables to AWS SSM or Azure Key Vault, allowing development teams to securely store and manage centralized environment configuration in both directions.
 
 ## Inspiration
 
@@ -13,11 +13,11 @@ This project was inspired by [envilder](https://github.com/macalbert/envilder), 
 ## Features
 
 - 🔒 **Secure secret management** - Fetch secrets directly from AWS SSM Parameter Store or Azure Key Vault
-- 📤 **Push mode** - Upload local .env files to AWS SSM Parameter Store
-- 🔄 **Sync mode** - Compare and update local .env files with AWS SSM values
+- 📤 **Push mode** - Upload local .env files to AWS SSM Parameter Store or Azure Key Vault
+- 🔄 **Sync mode** - Compare and update local .env files with AWS SSM or Azure Key Vault values
 - 📝 **Simple mapping** - Define JSON mappings between environment variables and SSM paths or Azure secret names
 - 🔐 **IAM-based access control** - Use AWS IAM policies to control who can access which parameters
-- ☁️ **Azure support** - Fetch secrets from Azure Key Vault using managed identities or Azure CLI credentials
+- ☁️ **Azure support** - Full support for Azure Key Vault (pull, push, and sync) using managed identities or Azure CLI credentials
 - 🌍 **Multi-profile support** - Support for multiple AWS profiles and regions
 - 💾 **Local .env generation** - Generate standard .env files for local development
 - 🚀 **Cross-platform** - Binaries available for Linux and Windows
@@ -137,15 +137,28 @@ go build -o envchanter .
 
 2. **Azure Permissions** - Your Azure user/managed identity needs the following permissions on the Key Vault:
 
+   For **pull mode** (fetching secrets):
    - `Key Vault Secrets User` role (for read-only access)
    - Or assign specific permissions:
      - `Get` permission on secrets
 
+   For **push mode** (uploading secrets), add:
+   - `Key Vault Secrets Officer` role (for read/write access)
+   - Or assign specific permissions:
+     - `Get` and `Set` permissions on secrets
+
    You can assign the role using Azure CLI:
 
    ```bash
+   # For read-only (pull mode)
    az role assignment create \
      --role "Key Vault Secrets User" \
+     --assignee <your-user-or-service-principal-id> \
+     --scope /subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.KeyVault/vaults/<vault-name>
+
+   # For read/write (push and sync modes)
+   az role assignment create \
+     --role "Key Vault Secrets Officer" \
      --assignee <your-user-or-service-principal-id> \
      --scope /subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.KeyVault/vaults/<vault-name>
    ```
@@ -155,8 +168,8 @@ go build -o envchanter .
 EnvChanter supports three modes of operation:
 
 - **Pull mode** (default): Fetch parameters from AWS SSM or Azure Key Vault and generate a local `.env` file
-- **Push mode**: Upload local environment variables to AWS SSM Parameter Store (AWS only)
-- **Sync mode**: Compare local `.env` with AWS SSM and update differences (AWS only)
+- **Push mode**: Upload local environment variables to AWS SSM Parameter Store or Azure Key Vault
+- **Sync mode**: Compare local `.env` with AWS SSM or Azure Key Vault and update differences
 
 ### Command-Line Options
 
@@ -170,9 +183,9 @@ EnvChanter supports three modes of operation:
   -region string
         AWS region to use (uses default region if not specified)
   -push
-        Push mode: upload local .env to SSM (AWS only)
+        Push mode: upload local .env to SSM or Azure Key Vault
   -sync
-        Sync mode: compare .env with SSM and update differences (AWS only)
+        Sync mode: compare .env with SSM or Azure Key Vault and update differences
   -force
         Force mode: update all differences without prompting (only with --sync)
   -key string
@@ -180,7 +193,9 @@ EnvChanter supports three modes of operation:
   -value string
         Value of the single environment variable to push (only with --push)
   -ssm-path string
-        SSM path for the single environment variable (only with --push)
+        SSM path for the single environment variable (only with --push and AWS)
+  -secret-name string
+        Azure Key Vault secret name for the single environment variable (only with --push and --azure)
   -azure
         Use Azure Key Vault instead of AWS SSM
   -vault-name string
@@ -450,7 +465,7 @@ DATABASE_URL=postgresql://localhost:5432/mydb
 DB_PASSWORD=your-secret-password
 ```
 
-#### Azure Mode Examples
+#### Azure Pull Mode Examples
 
 **Basic pull from Azure Key Vault:**
 
@@ -468,6 +483,53 @@ envchanter --azure --vault-name my-vault --map envchanter.azure.json --env .env.
 
 ```bash
 envchanter --azure --vault-name my-vault --map envchanter.azure.json --quotes
+```
+
+#### Azure Push Mode Examples
+
+Azure Key Vault now supports push mode to upload secrets from your local .env file.
+
+**Push multiple secrets from .env file:**
+
+```bash
+envchanter --azure --vault-name my-vault --push --map envchanter.azure.json --env .env
+```
+
+**Push a single secret:**
+
+```bash
+envchanter --azure --vault-name my-vault --push --key API_KEY --value "secret123" --secret-name api-key
+```
+
+**Note:** Azure Key Vault automatically versions secrets. Each push creates a new version, and the latest version is retrieved by default during pull operations.
+
+#### Azure Sync Mode Examples
+
+Sync mode compares your local .env file with Azure Key Vault and updates differences.
+
+**Interactive sync (prompts for each difference):**
+
+```bash
+envchanter --azure --vault-name my-vault --sync --map envchanter.azure.json --env .env
+```
+
+**Force sync (automatically updates all differences):**
+
+```bash
+envchanter --azure --vault-name my-vault --sync --force --map envchanter.azure.json --env .env
+```
+
+When differences are found, you'll see output similar to AWS SSM sync mode:
+
+```
+Found 2 secret(s) with differences:
+
+1. DB_PASSWORD
+   Local:  old_password
+   Azure:  new_password
+   Name:   db-password
+
+Update DB_PASSWORD (1/2)? [y]es/[n]o/[a]ll/[c]ancel:
 ```
 
 #### Authentication Methods
