@@ -85,8 +85,8 @@ func validateEnvVarName(name string) error {
 		if i == 0 && char >= '0' && char <= '9' {
 			return fmt.Errorf("environment variable name cannot start with a digit")
 		}
-		if !((char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || 
-			 (char >= '0' && char <= '9') || char == '_') {
+		if !((char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') ||
+			(char >= '0' && char <= '9') || char == '_') {
 			return fmt.Errorf("environment variable name contains invalid character: %c", char)
 		}
 	}
@@ -107,9 +107,9 @@ func validateSSMPath(path string) error {
 
 	// Check for invalid characters (AWS SSM allows alphanumeric, -, _, ., and /)
 	for _, char := range path {
-		if !((char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || 
-			 (char >= '0' && char <= '9') || char == '-' || char == '_' || 
-			 char == '.' || char == '/') {
+		if !((char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') ||
+			(char >= '0' && char <= '9') || char == '-' || char == '_' ||
+			char == '.' || char == '/') {
 			return fmt.Errorf("SSM path contains invalid character: %c", char)
 		}
 	}
@@ -139,8 +139,8 @@ func validateAzureSecretName(name string) error {
 	}
 
 	for _, char := range name {
-		if !((char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || 
-			 (char >= '0' && char <= '9') || char == '-') {
+		if !((char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') ||
+			(char >= '0' && char <= '9') || char == '-') {
 			return fmt.Errorf("secret name contains invalid character: %c (only alphanumeric and hyphens allowed)", char)
 		}
 	}
@@ -215,14 +215,14 @@ func fetchParametersFromAzure(ctx context.Context, client *azsecrets.Client, par
 			if authErr := checkAzureAuthError(err); authErr != nil {
 				return nil, authErr
 			}
-			
+
 			// Check if the error is NotFound
 			var respErr *azcore.ResponseError
 			if errors.As(err, &respErr) && respErr.StatusCode == http.StatusNotFound {
 				fmt.Printf("Warning: secret not found for %s, skipping.\n", envKey)
 				continue
 			}
-			
+
 			// For other errors, fail without exposing the secret name
 			return nil, fmt.Errorf("failed to get secret for %s: %w", envKey, err)
 		}
@@ -376,310 +376,6 @@ func syncParametersWithAzure(ctx context.Context, client *azsecrets.Client, loca
 
 	fmt.Printf("\n✓ Successfully updated %s with %d secret(s) from Azure Key Vault\n", envFile, len(toUpdate))
 	return nil
-}
-
-func main() {
-	// Print ASCII artwork
-	fmt.Print(asciiArt)
-
-	// Define command-line flags
-	mapFile := flag.String("map", "", "Path to JSON file mapping env vars to SSM parameter paths or Azure secret names")
-	envFile := flag.String("env", ".env", "Path to .env file (for pull: output file, for push: input file)")
-	profile := flag.String("profile", "", "AWS profile to use")
-	region := flag.String("region", "", "AWS region to use")
-	showVersion := flag.Bool("version", false, "Show version information")
-	push := flag.Bool("push", false, "Push mode: upload local .env to SSM")
-	sync := flag.Bool("sync", false, "Sync mode: compare .env with SSM and update differences")
-	force := flag.Bool("force", false, "Force mode: update all differences without prompting (only with --sync)")
-	key := flag.String("key", "", "Single environment variable name to push (only with --push)")
-	value := flag.String("value", "", "Value of the single environment variable to push (only with --push)")
-	ssmPath := flag.String("ssm-path", "", "SSM path for the single environment variable (only with --push and AWS)")
-	secretName := flag.String("secret-name", "", "Azure Key Vault secret name for the single environment variable (only with --push and --azure)")
-	quotes := flag.Bool("quotes", false, "Always quote values in the .env file output")
-	azure := flag.Bool("azure", false, "Use Azure Key Vault instead of AWS SSM")
-	vaultName := flag.String("vault-name", "", "Azure Key Vault name (required with --azure)")
-
-	flag.Parse()
-
-	if *showVersion {
-		fmt.Printf("EnvChanter %s\n", version)
-		os.Exit(0)
-	}
-
-	// Validate flags based on mode
-	if *push && *sync {
-		fmt.Println("Error: Cannot use --push and --sync together")
-		fmt.Println("\nUsage:")
-		flag.PrintDefaults()
-		os.Exit(1)
-	}
-
-	// Azure-specific validation
-	if *azure {
-		if *vaultName == "" {
-			fmt.Println("Error: --vault-name is required when using --azure")
-			fmt.Println("\nUsage:")
-			flag.PrintDefaults()
-			os.Exit(1)
-		}
-	}
-
-	if *push {
-		// Push mode validation
-		if *key != "" || *value != "" || *ssmPath != "" || *secretName != "" {
-			// Single parameter push mode
-			if *azure {
-				// Azure single parameter push
-				if *key == "" || *value == "" || *secretName == "" {
-					fmt.Println("Error: For Azure single parameter push, all of --key, --value, and --secret-name are required")
-					fmt.Println("\nUsage:")
-					flag.PrintDefaults()
-					os.Exit(1)
-				}
-			} else {
-				// AWS single parameter push
-				if *key == "" || *value == "" || *ssmPath == "" {
-					fmt.Println("Error: For AWS single parameter push, all of --key, --value, and --ssm-path are required")
-					fmt.Println("\nUsage:")
-					flag.PrintDefaults()
-					os.Exit(1)
-				}
-			}
-		} else {
-			// File-based push mode
-			if *mapFile == "" || *envFile == "" {
-				fmt.Println("Error: For file-based push, both --map and --env are required")
-				fmt.Println("\nUsage:")
-				flag.PrintDefaults()
-				os.Exit(1)
-			}
-		}
-	} else if *sync {
-		// Sync mode validation
-		if *mapFile == "" || *envFile == "" {
-			fmt.Println("Error: For sync mode, both --map and --env are required")
-			fmt.Println("\nUsage:")
-			flag.PrintDefaults()
-			os.Exit(1)
-		}
-	} else {
-		// Pull mode validation (existing behavior)
-		if *mapFile == "" {
-			fmt.Println("Error: --map flag is required")
-			fmt.Println("\nUsage:")
-			flag.PrintDefaults()
-			os.Exit(1)
-		}
-	}
-
-	ctx := context.Background()
-
-	// Handle Azure mode
-	if *azure {
-		// Create Azure client
-		azureClient, err := createAzureClient(ctx, *vaultName)
-		if err != nil {
-			fmt.Printf("Error creating Azure Key Vault client: %v\n", err)
-			os.Exit(1)
-		}
-
-		if *push {
-			// Azure push mode
-			if *key != "" {
-				// Validate key and secret name before pushing
-				if err := validateEnvVarName(*key); err != nil {
-					fmt.Printf("Error: invalid environment variable name: %v\n", err)
-					os.Exit(1)
-				}
-				if err := validateAzureSecretName(*secretName); err != nil {
-					fmt.Printf("Error: invalid Azure secret name: %v\n", err)
-					os.Exit(1)
-				}
-
-				// Single parameter push to Azure
-				err = pushSingleParameterToAzure(ctx, azureClient, *key, *value, *secretName)
-				if err != nil {
-					fmt.Printf("Error pushing secret: %v\n", err)
-					os.Exit(1)
-				}
-				fmt.Printf("Successfully pushed %s to Azure Key Vault secret %s\n", *key, *secretName)
-			} else {
-				// File-based push to Azure
-				paramMap, err := loadParameterMapRaw(*mapFile)
-				if err != nil {
-					fmt.Printf("Error loading parameter map: %v\n", err)
-					os.Exit(1)
-				}
-
-				// Validate parameter map for Azure
-				if err := validateAzureParameterMap(paramMap); err != nil {
-					fmt.Printf("Error: invalid parameter map: %v\n", err)
-					os.Exit(1)
-				}
-
-				envVars, err := readEnvFile(*envFile)
-				if err != nil {
-					fmt.Printf("Error reading .env file: %v\n", err)
-					os.Exit(1)
-				}
-
-				err = pushParametersToAzure(ctx, azureClient, envVars, paramMap)
-				if err != nil {
-					fmt.Printf("Error pushing secrets: %v\n", err)
-					os.Exit(1)
-				}
-				fmt.Printf("Successfully pushed %d secrets to Azure Key Vault\n", len(envVars))
-			}
-		} else if *sync {
-			// Azure sync mode
-			paramMap, err := loadParameterMapRaw(*mapFile)
-			if err != nil {
-				fmt.Printf("Error loading parameter map: %v\n", err)
-				os.Exit(1)
-			}
-
-			// Validate parameter map for Azure
-			if err := validateAzureParameterMap(paramMap); err != nil {
-				fmt.Printf("Error: invalid parameter map: %v\n", err)
-				os.Exit(1)
-			}
-
-			localEnvVars, err := readEnvFile(*envFile)
-			if err != nil {
-				fmt.Printf("Error reading .env file: %v\n", err)
-				os.Exit(1)
-			}
-
-			err = syncParametersWithAzure(ctx, azureClient, localEnvVars, paramMap, *envFile, *force, *quotes)
-			if err != nil {
-				fmt.Printf("Error syncing secrets: %v\n", err)
-				os.Exit(1)
-			}
-		} else {
-			// Azure pull mode
-			paramMap, err := loadParameterMapRaw(*mapFile)
-			if err != nil {
-				fmt.Printf("Error loading parameter map: %v\n", err)
-				os.Exit(1)
-			}
-
-			// Validate parameter map for Azure
-			if err := validateAzureParameterMap(paramMap); err != nil {
-				fmt.Printf("Error: invalid parameter map: %v\n", err)
-				os.Exit(1)
-			}
-
-			// Fetch secrets from Azure
-			envVars, err := fetchParametersFromAzure(ctx, azureClient, paramMap)
-			if err != nil {
-				fmt.Printf("Error fetching secrets: %v\n", err)
-				os.Exit(1)
-			}
-
-			// Write .env file
-			err = writeEnvFile(*envFile, envVars, *quotes)
-			if err != nil {
-				fmt.Printf("Error writing .env file: %v\n", err)
-				os.Exit(1)
-			}
-
-			fmt.Printf("Successfully generated %s with %d secrets from Azure Key Vault\n", *envFile, len(envVars))
-		}
-		return
-	}
-
-	// Create AWS config
-	cfg, err := loadAWSConfig(ctx, *profile, *region)
-	if err != nil {
-		fmt.Printf("Error loading AWS config: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Create SSM client
-	ssmClient := ssm.NewFromConfig(cfg)
-
-	if *push {
-		// Push mode
-		if *key != "" {
-			// Validate key and SSM path before pushing
-			if err := validateEnvVarName(*key); err != nil {
-				fmt.Printf("Error: invalid environment variable name: %v\n", err)
-				os.Exit(1)
-			}
-			if err := validateSSMPath(*ssmPath); err != nil {
-				fmt.Printf("Error: invalid SSM path: %v\n", err)
-				os.Exit(1)
-			}
-
-			// Single parameter push
-			err = pushSingleParameter(ctx, ssmClient, *key, *value, *ssmPath)
-			if err != nil {
-				fmt.Printf("Error pushing parameter: %v\n", err)
-				os.Exit(1)
-			}
-			fmt.Printf("Successfully pushed %s to %s\n", *key, *ssmPath)
-		} else {
-			// File-based push
-			paramMap, err := loadParameterMap(*mapFile)
-			if err != nil {
-				fmt.Printf("Error loading parameter map: %v\n", err)
-				os.Exit(1)
-			}
-
-			envVars, err := readEnvFile(*envFile)
-			if err != nil {
-				fmt.Printf("Error reading .env file: %v\n", err)
-				os.Exit(1)
-			}
-
-			err = pushParameters(ctx, ssmClient, envVars, paramMap)
-			if err != nil {
-				fmt.Printf("Error pushing parameters: %v\n", err)
-				os.Exit(1)
-			}
-			fmt.Printf("Successfully pushed %d parameters to SSM\n", len(envVars))
-		}
-	} else if *sync {
-		// Sync mode
-		paramMap, err := loadParameterMap(*mapFile)
-		if err != nil {
-			fmt.Printf("Error loading parameter map: %v\n", err)
-			os.Exit(1)
-		}
-
-		localEnvVars, err := readEnvFile(*envFile)
-		if err != nil {
-			fmt.Printf("Error reading .env file: %v\n", err)
-			os.Exit(1)
-		}
-
-		err = syncParameters(ctx, ssmClient, localEnvVars, paramMap, *envFile, *force, *quotes)
-		if err != nil {
-			fmt.Printf("Error syncing parameters: %v\n", err)
-			os.Exit(1)
-		}
-	} else {
-		// Pull mode (existing behavior)
-		paramMap, err := loadParameterMap(*mapFile)
-		if err != nil {
-			fmt.Printf("Error loading parameter map: %v\n", err)
-			os.Exit(1)
-		}
-
-		envVars, err := fetchParameters(ctx, ssmClient, paramMap)
-		if err != nil {
-			fmt.Printf("Error fetching parameters: %v\n", err)
-			os.Exit(1)
-		}
-
-		err = writeEnvFile(*envFile, envVars, *quotes)
-		if err != nil {
-			fmt.Printf("Error writing .env file: %v\n", err)
-			os.Exit(1)
-		}
-
-		fmt.Printf("Successfully generated %s with %d parameters\n", *envFile, len(envVars))
-	}
 }
 
 // loadParameterMapRaw reads the JSON mapping file without validation
@@ -1064,4 +760,308 @@ func promptForUpdates(differences []Difference) ([]Difference, error) {
 	}
 
 	return toUpdate, nil
+}
+
+func main() {
+	// Print ASCII artwork
+	fmt.Print(asciiArt)
+
+	// Define command-line flags
+	mapFile := flag.String("map", "", "Path to JSON file mapping env vars to SSM parameter paths or Azure secret names")
+	envFile := flag.String("env", ".env", "Path to .env file (for pull: output file, for push: input file)")
+	profile := flag.String("profile", "", "AWS profile to use")
+	region := flag.String("region", "", "AWS region to use")
+	showVersion := flag.Bool("version", false, "Show version information")
+	push := flag.Bool("push", false, "Push mode: upload local .env to SSM")
+	sync := flag.Bool("sync", false, "Sync mode: compare .env with SSM and update differences")
+	force := flag.Bool("force", false, "Force mode: update all differences without prompting (only with --sync)")
+	key := flag.String("key", "", "Single environment variable name to push (only with --push)")
+	value := flag.String("value", "", "Value of the single environment variable to push (only with --push)")
+	ssmPath := flag.String("ssm-path", "", "SSM path for the single environment variable (only with --push and AWS)")
+	secretName := flag.String("secret-name", "", "Azure Key Vault secret name for the single environment variable (only with --push and --azure)")
+	quotes := flag.Bool("quotes", false, "Always quote values in the .env file output")
+	azure := flag.Bool("azure", false, "Use Azure Key Vault instead of AWS SSM")
+	vaultName := flag.String("vault-name", "", "Azure Key Vault name (required with --azure)")
+
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("EnvChanter %s\n", version)
+		os.Exit(0)
+	}
+
+	// Validate flags based on mode
+	if *push && *sync {
+		fmt.Println("Error: Cannot use --push and --sync together")
+		fmt.Println("\nUsage:")
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
+
+	// Azure-specific validation
+	if *azure {
+		if *vaultName == "" {
+			fmt.Println("Error: --vault-name is required when using --azure")
+			fmt.Println("\nUsage:")
+			flag.PrintDefaults()
+			os.Exit(1)
+		}
+	}
+
+	if *push {
+		// Push mode validation
+		if *key != "" || *value != "" || *ssmPath != "" || *secretName != "" {
+			// Single parameter push mode
+			if *azure {
+				// Azure single parameter push
+				if *key == "" || *value == "" || *secretName == "" {
+					fmt.Println("Error: For Azure single parameter push, all of --key, --value, and --secret-name are required")
+					fmt.Println("\nUsage:")
+					flag.PrintDefaults()
+					os.Exit(1)
+				}
+			} else {
+				// AWS single parameter push
+				if *key == "" || *value == "" || *ssmPath == "" {
+					fmt.Println("Error: For AWS single parameter push, all of --key, --value, and --ssm-path are required")
+					fmt.Println("\nUsage:")
+					flag.PrintDefaults()
+					os.Exit(1)
+				}
+			}
+		} else {
+			// File-based push mode
+			if *mapFile == "" || *envFile == "" {
+				fmt.Println("Error: For file-based push, both --map and --env are required")
+				fmt.Println("\nUsage:")
+				flag.PrintDefaults()
+				os.Exit(1)
+			}
+		}
+	} else if *sync {
+		// Sync mode validation
+		if *mapFile == "" || *envFile == "" {
+			fmt.Println("Error: For sync mode, both --map and --env are required")
+			fmt.Println("\nUsage:")
+			flag.PrintDefaults()
+			os.Exit(1)
+		}
+	} else {
+		// Pull mode validation (existing behavior)
+		if *mapFile == "" {
+			fmt.Println("Error: --map flag is required")
+			fmt.Println("\nUsage:")
+			flag.PrintDefaults()
+			os.Exit(1)
+		}
+	}
+
+	ctx := context.Background()
+
+	// Handle Azure mode
+	if *azure {
+		// Create Azure client
+		azureClient, err := createAzureClient(ctx, *vaultName)
+		if err != nil {
+			fmt.Printf("Error creating Azure Key Vault client: %v\n", err)
+			os.Exit(1)
+		}
+
+		if *push {
+			// Azure push mode
+			if *key != "" {
+				// Validate key and secret name before pushing
+				if err := validateEnvVarName(*key); err != nil {
+					fmt.Printf("Error: invalid environment variable name: %v\n", err)
+					os.Exit(1)
+				}
+				if err := validateAzureSecretName(*secretName); err != nil {
+					fmt.Printf("Error: invalid Azure secret name: %v\n", err)
+					os.Exit(1)
+				}
+
+				// Single parameter push to Azure
+				err = pushSingleParameterToAzure(ctx, azureClient, *key, *value, *secretName)
+				if err != nil {
+					fmt.Printf("Error pushing secret: %v\n", err)
+					os.Exit(1)
+				}
+				fmt.Printf("Successfully pushed %s to Azure Key Vault secret %s\n", *key, *secretName)
+			} else {
+				// File-based push to Azure
+				paramMap, err := loadParameterMapRaw(*mapFile)
+				if err != nil {
+					fmt.Printf("Error loading parameter map: %v\n", err)
+					os.Exit(1)
+				}
+
+				// Validate parameter map for Azure
+				if err := validateAzureParameterMap(paramMap); err != nil {
+					fmt.Printf("Error: invalid parameter map: %v\n", err)
+					os.Exit(1)
+				}
+
+				envVars, err := readEnvFile(*envFile)
+				if err != nil {
+					fmt.Printf("Error reading .env file: %v\n", err)
+					os.Exit(1)
+				}
+
+				err = pushParametersToAzure(ctx, azureClient, envVars, paramMap)
+				if err != nil {
+					fmt.Printf("Error pushing secrets: %v\n", err)
+					os.Exit(1)
+				}
+				fmt.Printf("Successfully pushed %d secrets to Azure Key Vault\n", len(envVars))
+			}
+		} else if *sync {
+			// Azure sync mode
+			paramMap, err := loadParameterMapRaw(*mapFile)
+			if err != nil {
+				fmt.Printf("Error loading parameter map: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Validate parameter map for Azure
+			if err := validateAzureParameterMap(paramMap); err != nil {
+				fmt.Printf("Error: invalid parameter map: %v\n", err)
+				os.Exit(1)
+			}
+
+			localEnvVars, err := readEnvFile(*envFile)
+			if err != nil {
+				fmt.Printf("Error reading .env file: %v\n", err)
+				os.Exit(1)
+			}
+
+			err = syncParametersWithAzure(ctx, azureClient, localEnvVars, paramMap, *envFile, *force, *quotes)
+			if err != nil {
+				fmt.Printf("Error syncing secrets: %v\n", err)
+				os.Exit(1)
+			}
+		} else {
+			// Azure pull mode
+			paramMap, err := loadParameterMapRaw(*mapFile)
+			if err != nil {
+				fmt.Printf("Error loading parameter map: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Validate parameter map for Azure
+			if err := validateAzureParameterMap(paramMap); err != nil {
+				fmt.Printf("Error: invalid parameter map: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Fetch secrets from Azure
+			envVars, err := fetchParametersFromAzure(ctx, azureClient, paramMap)
+			if err != nil {
+				fmt.Printf("Error fetching secrets: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Write .env file
+			err = writeEnvFile(*envFile, envVars, *quotes)
+			if err != nil {
+				fmt.Printf("Error writing .env file: %v\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Printf("Successfully generated %s with %d secrets from Azure Key Vault\n", *envFile, len(envVars))
+		}
+		return
+	}
+
+	// Create AWS config
+	cfg, err := loadAWSConfig(ctx, *profile, *region)
+	if err != nil {
+		fmt.Printf("Error loading AWS config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Create SSM client
+	ssmClient := ssm.NewFromConfig(cfg)
+
+	if *push {
+		// Push mode
+		if *key != "" {
+			// Validate key and SSM path before pushing
+			if err := validateEnvVarName(*key); err != nil {
+				fmt.Printf("Error: invalid environment variable name: %v\n", err)
+				os.Exit(1)
+			}
+			if err := validateSSMPath(*ssmPath); err != nil {
+				fmt.Printf("Error: invalid SSM path: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Single parameter push
+			err = pushSingleParameter(ctx, ssmClient, *key, *value, *ssmPath)
+			if err != nil {
+				fmt.Printf("Error pushing parameter: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("Successfully pushed %s to %s\n", *key, *ssmPath)
+		} else {
+			// File-based push
+			paramMap, err := loadParameterMap(*mapFile)
+			if err != nil {
+				fmt.Printf("Error loading parameter map: %v\n", err)
+				os.Exit(1)
+			}
+
+			envVars, err := readEnvFile(*envFile)
+			if err != nil {
+				fmt.Printf("Error reading .env file: %v\n", err)
+				os.Exit(1)
+			}
+
+			err = pushParameters(ctx, ssmClient, envVars, paramMap)
+			if err != nil {
+				fmt.Printf("Error pushing parameters: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("Successfully pushed %d parameters to SSM\n", len(envVars))
+		}
+	} else if *sync {
+		// Sync mode
+		paramMap, err := loadParameterMap(*mapFile)
+		if err != nil {
+			fmt.Printf("Error loading parameter map: %v\n", err)
+			os.Exit(1)
+		}
+
+		localEnvVars, err := readEnvFile(*envFile)
+		if err != nil {
+			fmt.Printf("Error reading .env file: %v\n", err)
+			os.Exit(1)
+		}
+
+		err = syncParameters(ctx, ssmClient, localEnvVars, paramMap, *envFile, *force, *quotes)
+		if err != nil {
+			fmt.Printf("Error syncing parameters: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		// Pull mode (existing behavior)
+		paramMap, err := loadParameterMap(*mapFile)
+		if err != nil {
+			fmt.Printf("Error loading parameter map: %v\n", err)
+			os.Exit(1)
+		}
+
+		envVars, err := fetchParameters(ctx, ssmClient, paramMap)
+		if err != nil {
+			fmt.Printf("Error fetching parameters: %v\n", err)
+			os.Exit(1)
+		}
+
+		err = writeEnvFile(*envFile, envVars, *quotes)
+		if err != nil {
+			fmt.Printf("Error writing .env file: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Successfully generated %s with %d parameters\n", *envFile, len(envVars))
+	}
 }
