@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -186,6 +189,20 @@ func createAzureClient(ctx context.Context, vaultName string) (*azsecrets.Client
 	return client, nil
 }
 
+// checkAzureAuthError checks if an error is an authentication or authorization error
+func checkAzureAuthError(err error) error {
+	var respErr *azcore.ResponseError
+	if errors.As(err, &respErr) {
+		switch respErr.StatusCode {
+		case http.StatusUnauthorized: // 401
+			return fmt.Errorf("Azure authentication failed: no valid credentials available. Please run 'az login' or configure Azure credentials")
+		case http.StatusForbidden: // 403
+			return fmt.Errorf("Azure authorization failed: insufficient permissions to access Key Vault. Ensure you have the required role assigned (e.g., 'Key Vault Secrets User' for read, 'Key Vault Secrets Officer' for write)")
+		}
+	}
+	return nil
+}
+
 // fetchParametersFromAzure retrieves secret values from Azure Key Vault
 func fetchParametersFromAzure(ctx context.Context, client *azsecrets.Client, paramMap ParameterMap) (map[string]string, error) {
 	envVars := make(map[string]string)
@@ -194,11 +211,18 @@ func fetchParametersFromAzure(ctx context.Context, client *azsecrets.Client, par
 		// Get the latest version of the secret (empty version string gets latest)
 		resp, err := client.GetSecret(ctx, secretName, "", nil)
 		if err != nil {
-			// If the error is NotFound, log a warning and continue
-			if strings.Contains(err.Error(), "SecretNotFound") || strings.Contains(err.Error(), "not found") {
+			// Check for authentication/authorization errors first
+			if authErr := checkAzureAuthError(err); authErr != nil {
+				return nil, authErr
+			}
+			
+			// Check if the error is NotFound
+			var respErr *azcore.ResponseError
+			if errors.As(err, &respErr) && respErr.StatusCode == http.StatusNotFound {
 				fmt.Printf("Warning: secret not found for %s, skipping.\n", envKey)
 				continue
 			}
+			
 			// For other errors, fail without exposing the secret name
 			return nil, fmt.Errorf("failed to get secret for %s: %w", envKey, err)
 		}
@@ -219,6 +243,10 @@ func pushSingleParameterToAzure(ctx context.Context, client *azsecrets.Client, k
 
 	_, err := client.SetSecret(ctx, secretName, params, nil)
 	if err != nil {
+		// Check for authentication/authorization errors
+		if authErr := checkAzureAuthError(err); authErr != nil {
+			return authErr
+		}
 		return fmt.Errorf("failed to set secret: %w", err)
 	}
 
@@ -240,6 +268,10 @@ func pushParametersToAzure(ctx context.Context, client *azsecrets.Client, envVar
 
 		_, err := client.SetSecret(ctx, secretName, params, nil)
 		if err != nil {
+			// Check for authentication/authorization errors
+			if authErr := checkAzureAuthError(err); authErr != nil {
+				return authErr
+			}
 			return fmt.Errorf("failed to set secret %s: %w", envKey, err)
 		}
 	}
