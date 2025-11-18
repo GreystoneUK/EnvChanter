@@ -318,8 +318,8 @@ func main() {
 			os.Exit(1)
 		}
 
-		// Load parameter map
-		paramMap, err := loadParameterMap(*mapFile)
+		// Load parameter map without validation
+		paramMap, err := loadParameterMapRaw(*mapFile)
 		if err != nil {
 			fmt.Printf("Error loading parameter map: %v\n", err)
 			os.Exit(1)
@@ -443,8 +443,8 @@ func main() {
 	}
 }
 
-// loadParameterMap reads the JSON mapping file
-func loadParameterMap(filename string) (ParameterMap, error) {
+// loadParameterMapRaw reads the JSON mapping file without validation
+func loadParameterMapRaw(filename string) (ParameterMap, error) {
 	// Validate filename to prevent path traversal
 	if err := validateFilePath(filename); err != nil {
 		return nil, fmt.Errorf("invalid file path: %w", err)
@@ -461,7 +461,17 @@ func loadParameterMap(filename string) (ParameterMap, error) {
 		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
 
-	// Validate parameter map contents
+	return paramMap, nil
+}
+
+// loadParameterMap reads the JSON mapping file and validates for AWS SSM
+func loadParameterMap(filename string) (ParameterMap, error) {
+	paramMap, err := loadParameterMapRaw(filename)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate parameter map contents for AWS SSM
 	if err := validateParameterMap(paramMap); err != nil {
 		return nil, fmt.Errorf("invalid parameter map: %w", err)
 	}
