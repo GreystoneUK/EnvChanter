@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -122,12 +124,99 @@ func validateSSMPath(path string) error {
 	return nil
 }
 
+// validateAzureSecretName validates an Azure Key Vault secret name
+func validateAzureSecretName(name string) error {
+	if name == "" {
+		return fmt.Errorf("empty secret name")
+	}
+
+	// Azure Key Vault secret names must be 1-127 characters long and contain only alphanumeric characters and hyphens
+	if len(name) > 127 {
+		return fmt.Errorf("secret name exceeds maximum length of 127 characters")
+	}
+
+	for _, char := range name {
+		if !((char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || 
+			 (char >= '0' && char <= '9') || char == '-') {
+			return fmt.Errorf("secret name contains invalid character: %c (only alphanumeric and hyphens allowed)", char)
+		}
+	}
+
+	return nil
+}
+
+// validateAzureParameterMap validates the contents of a parameter map for Azure Key Vault
+func validateAzureParameterMap(paramMap ParameterMap) error {
+	if len(paramMap) == 0 {
+		return fmt.Errorf("parameter map is empty")
+	}
+
+	for envKey, secretName := range paramMap {
+		// Validate environment variable name
+		if err := validateEnvVarName(envKey); err != nil {
+			return fmt.Errorf("invalid environment variable name %q: %w", envKey, err)
+		}
+
+		// Validate Azure secret name
+		if err := validateAzureSecretName(secretName); err != nil {
+			return fmt.Errorf("invalid Azure secret name %q for key %q: %w", secretName, envKey, err)
+		}
+	}
+
+	return nil
+}
+
+// createAzureClient creates an Azure Key Vault client
+func createAzureClient(ctx context.Context, vaultName string) (*azsecrets.Client, error) {
+	// Create default Azure credential (uses managed identity, environment variables, or Azure CLI)
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Azure credential: %w", err)
+	}
+
+	// Construct vault URL
+	vaultURL := fmt.Sprintf("https://%s.vault.azure.net/", vaultName)
+
+	// Create secrets client
+	client, err := azsecrets.NewClient(vaultURL, cred, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Azure Key Vault client: %w", err)
+	}
+
+	return client, nil
+}
+
+// fetchParametersFromAzure retrieves secret values from Azure Key Vault
+func fetchParametersFromAzure(ctx context.Context, client *azsecrets.Client, paramMap ParameterMap) (map[string]string, error) {
+	envVars := make(map[string]string)
+
+	for envKey, secretName := range paramMap {
+		// Get the latest version of the secret (empty version string gets latest)
+		resp, err := client.GetSecret(ctx, secretName, "", nil)
+		if err != nil {
+			// If the error is NotFound, log a warning and continue
+			if strings.Contains(err.Error(), "SecretNotFound") || strings.Contains(err.Error(), "not found") {
+				fmt.Printf("Warning: secret not found for %s, skipping.\n", envKey)
+				continue
+			}
+			// For other errors, fail without exposing the secret name
+			return nil, fmt.Errorf("failed to get secret for %s: %w", envKey, err)
+		}
+
+		if resp.Value != nil {
+			envVars[envKey] = *resp.Value
+		}
+	}
+
+	return envVars, nil
+}
+
 func main() {
 	// Print ASCII artwork
 	fmt.Print(asciiArt)
 
 	// Define command-line flags
-	mapFile := flag.String("map", "", "Path to JSON file mapping env vars to SSM parameter paths")
+	mapFile := flag.String("map", "", "Path to JSON file mapping env vars to SSM parameter paths or Azure secret names")
 	envFile := flag.String("env", ".env", "Path to .env file (for pull: output file, for push: input file)")
 	profile := flag.String("profile", "", "AWS profile to use")
 	region := flag.String("region", "", "AWS region to use")
@@ -139,6 +228,8 @@ func main() {
 	value := flag.String("value", "", "Value of the single environment variable to push (only with --push)")
 	ssmPath := flag.String("ssm-path", "", "SSM path for the single environment variable (only with --push)")
 	quotes := flag.Bool("quotes", false, "Always quote values in the .env file output")
+	azure := flag.Bool("azure", false, "Use Azure Key Vault instead of AWS SSM")
+	vaultName := flag.String("vault-name", "", "Azure Key Vault name (required with --azure)")
 
 	flag.Parse()
 
@@ -153,6 +244,22 @@ func main() {
 		fmt.Println("\nUsage:")
 		flag.PrintDefaults()
 		os.Exit(1)
+	}
+
+	// Azure-specific validation
+	if *azure {
+		if *vaultName == "" {
+			fmt.Println("Error: --vault-name is required when using --azure")
+			fmt.Println("\nUsage:")
+			flag.PrintDefaults()
+			os.Exit(1)
+		}
+		if *push || *sync {
+			fmt.Println("Error: Azure mode currently only supports pull operations")
+			fmt.Println("\nUsage:")
+			flag.PrintDefaults()
+			os.Exit(1)
+		}
 	}
 
 	if *push {
@@ -192,8 +299,57 @@ func main() {
 		}
 	}
 
-	// Create AWS config
 	ctx := context.Background()
+
+	// Handle Azure mode
+	if *azure {
+		// Azure pull mode (only mode supported)
+		if *mapFile == "" {
+			fmt.Println("Error: --map flag is required")
+			fmt.Println("\nUsage:")
+			flag.PrintDefaults()
+			os.Exit(1)
+		}
+
+		// Create Azure client
+		azureClient, err := createAzureClient(ctx, *vaultName)
+		if err != nil {
+			fmt.Printf("Error creating Azure Key Vault client: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Load parameter map
+		paramMap, err := loadParameterMap(*mapFile)
+		if err != nil {
+			fmt.Printf("Error loading parameter map: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Validate parameter map for Azure
+		if err := validateAzureParameterMap(paramMap); err != nil {
+			fmt.Printf("Error: invalid parameter map: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Fetch secrets from Azure
+		envVars, err := fetchParametersFromAzure(ctx, azureClient, paramMap)
+		if err != nil {
+			fmt.Printf("Error fetching secrets: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Write .env file
+		err = writeEnvFile(*envFile, envVars, *quotes)
+		if err != nil {
+			fmt.Printf("Error writing .env file: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Successfully generated %s with %d secrets from Azure Key Vault\n", *envFile, len(envVars))
+		return
+	}
+
+	// Create AWS config
 	cfg, err := loadAWSConfig(ctx, *profile, *region)
 	if err != nil {
 		fmt.Printf("Error loading AWS config: %v\n", err)
