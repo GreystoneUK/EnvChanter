@@ -527,3 +527,94 @@ func TestFilePermissions(t *testing.T) {
 		t.Errorf("Expected file permissions %v, got %v", expectedPerm, fileInfo.Mode().Perm())
 	}
 }
+
+func TestValidateAzureSecretName(t *testing.T) {
+	tests := []struct {
+		name       string
+		secretName string
+		wantErr    bool
+	}{
+		{"Valid simple name", "my-secret", false},
+		{"Valid with numbers", "secret123", false},
+		{"Valid with dashes", "my-secret-name", false},
+		{"Valid alphanumeric", "MySecret123", false},
+		{"Empty name", "", true},
+		{"Too long name", strings.Repeat("a", 128), true},
+		{"Contains underscore", "my_secret", true},
+		{"Contains slash", "my/secret", true},
+		{"Contains space", "my secret", true},
+		{"Contains special char", "my$secret", true},
+		{"Contains dot", "my.secret", true},
+		{"Valid max length", strings.Repeat("a", 127), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAzureSecretName(tt.secretName)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateAzureSecretName(%q) error = %v, wantErr %v", tt.secretName, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateAzureParameterMap(t *testing.T) {
+	tests := []struct {
+		name     string
+		paramMap ParameterMap
+		wantErr  bool
+	}{
+		{
+			name: "Valid parameter map",
+			paramMap: ParameterMap{
+				"DB_PASSWORD": "db-password",
+				"API_KEY":     "api-key",
+			},
+			wantErr: false,
+		},
+		{
+			name:     "Empty parameter map",
+			paramMap: ParameterMap{},
+			wantErr:  true,
+		},
+		{
+			name: "Invalid env var name",
+			paramMap: ParameterMap{
+				"123_INVALID": "secret-name",
+			},
+			wantErr: true,
+		},
+		{
+			name: "Invalid Azure secret name with slash",
+			paramMap: ParameterMap{
+				"VALID_KEY": "invalid/secret/name",
+			},
+			wantErr: true,
+		},
+		{
+			name: "Invalid Azure secret name with underscore",
+			paramMap: ParameterMap{
+				"VALID_KEY": "invalid_secret_name",
+			},
+			wantErr: true,
+		},
+		{
+			name: "Valid Azure secret names",
+			paramMap: ParameterMap{
+				"DB_PASSWORD":  "db-password",
+				"API_KEY":      "api-key",
+				"DATABASE_URL": "database-url",
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAzureParameterMap(tt.paramMap)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateAzureParameterMap() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
