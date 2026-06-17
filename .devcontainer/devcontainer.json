@@ -6,7 +6,8 @@
 	"image": "mcr.microsoft.com/devcontainers/go:2-1.25-trixie",
 	"features": {
 		"ghcr.io/devcontainers/features/aws-cli:1": {},
-		"ghcr.io/devcontainers/features/azure-cli:1": {}
+		"ghcr.io/devcontainers/features/azure-cli:1": {},
+		"ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
 	}
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
