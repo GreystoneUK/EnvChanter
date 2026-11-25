@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"sort"
@@ -204,7 +205,7 @@ func checkAzureAuthError(err error) error {
 }
 
 // fetchParametersFromAzure retrieves secret values from Azure Key Vault
-func fetchParametersFromAzure(ctx context.Context, client *azsecrets.Client, paramMap ParameterMap) (map[string]string, error) {
+func fetchParametersFromAzure(ctx context.Context, client *azsecrets.Client, paramMap ParameterMap, warnings io.Writer) (map[string]string, error) {
 	envVars := make(map[string]string)
 
 	for envKey, secretName := range paramMap {
@@ -219,7 +220,7 @@ func fetchParametersFromAzure(ctx context.Context, client *azsecrets.Client, par
 			// Check if the error is NotFound
 			var respErr *azcore.ResponseError
 			if errors.As(err, &respErr) && respErr.StatusCode == http.StatusNotFound {
-				fmt.Printf("Warning: secret not found for %s, skipping.\n", envKey)
+				fmt.Fprintf(warnings, "Warning: secret not found for %s, skipping.\n", envKey)
 				continue
 			}
 
@@ -276,105 +277,6 @@ func pushParametersToAzure(ctx context.Context, client *azsecrets.Client, envVar
 		}
 	}
 
-	return nil
-}
-
-// syncParametersWithAzure compares local .env with Azure Key Vault values and updates the .env file
-func syncParametersWithAzure(ctx context.Context, client *azsecrets.Client, localEnvVars map[string]string, paramMap ParameterMap, envFile string, force bool, quotes bool) error {
-	// Fetch current values from Azure Key Vault
-	azureEnvVars, err := fetchParametersFromAzure(ctx, client, paramMap)
-	if err != nil {
-		return fmt.Errorf("failed to fetch Azure Key Vault secrets: %w", err)
-	}
-
-	// Compare local and Azure values
-	var differences []Difference
-	for envKey, secretName := range paramMap {
-		localVal, localExists := localEnvVars[envKey]
-		azureVal, azureExists := azureEnvVars[envKey]
-
-		// Check if there's a difference
-		if !localExists {
-			// Local doesn't have this key, but Azure does
-			if azureExists {
-				differences = append(differences, Difference{
-					Key:       envKey,
-					LocalVal:  "",
-					SSMVal:    azureVal,
-					SSMPath:   secretName,
-					ExistsSSM: true,
-				})
-			}
-		} else if !azureExists {
-			// Local has the key but Azure doesn't - skip this
-			continue
-		} else if localVal != azureVal {
-			// Both exist but values differ
-			differences = append(differences, Difference{
-				Key:       envKey,
-				LocalVal:  localVal,
-				SSMVal:    azureVal,
-				SSMPath:   secretName,
-				ExistsSSM: true,
-			})
-		}
-	}
-
-	// If no differences found
-	if len(differences) == 0 {
-		fmt.Println("✓ All values are in sync. No updates needed.")
-		return nil
-	}
-
-	// Sort differences by key for consistent output
-	sort.Slice(differences, func(i, j int) bool {
-		return differences[i].Key < differences[j].Key
-	})
-
-	// Display differences
-	fmt.Printf("\nFound %d secret(s) with differences:\n\n", len(differences))
-	for i, diff := range differences {
-		fmt.Printf("%d. %s\n", i+1, diff.Key)
-		if diff.LocalVal == "" {
-			fmt.Printf("   Local:  (not set)\n")
-		} else {
-			fmt.Printf("   Local:  %s\n", diff.LocalVal)
-		}
-		fmt.Printf("   Azure:  %s\n", diff.SSMVal)
-		fmt.Printf("   Name:   %s\n\n", diff.SSMPath)
-	}
-
-	// Determine which values to update
-	var toUpdate []Difference
-	if force {
-		// Force mode: update all differences
-		toUpdate = differences
-		fmt.Printf("Force mode enabled. Updating all %d secret(s)...\n", len(toUpdate))
-	} else {
-		// Interactive mode: prompt for each difference
-		toUpdate, err = promptForUpdates(differences)
-		if err != nil {
-			return fmt.Errorf("error during prompting: %w", err)
-		}
-	}
-
-	if len(toUpdate) == 0 {
-		fmt.Println("No secrets selected for update.")
-		return nil
-	}
-
-	// Update local env vars with selected Azure values
-	for _, diff := range toUpdate {
-		localEnvVars[diff.Key] = diff.SSMVal
-	}
-
-	// Write updated values to .env file
-	err = writeEnvFile(envFile, localEnvVars, quotes)
-	if err != nil {
-		return fmt.Errorf("failed to write updated .env file: %w", err)
-	}
-
-	fmt.Printf("\n✓ Successfully updated %s with %d secret(s) from Azure Key Vault\n", envFile, len(toUpdate))
 	return nil
 }
 
@@ -435,7 +337,7 @@ func loadAWSConfig(ctx context.Context, profile, region string) (aws.Config, err
 }
 
 // fetchParameters retrieves parameter values from AWS SSM
-func fetchParameters(ctx context.Context, client *ssm.Client, paramMap ParameterMap) (map[string]string, error) {
+func fetchParameters(ctx context.Context, client *ssm.Client, paramMap ParameterMap, warnings io.Writer) (map[string]string, error) {
 	envVars := make(map[string]string)
 
 	for envKey, ssmPath := range paramMap {
@@ -448,7 +350,7 @@ func fetchParameters(ctx context.Context, client *ssm.Client, paramMap Parameter
 		if err != nil {
 			// If the error is ParameterNotFound, log a warning and continue
 			if strings.Contains(err.Error(), "ParameterNotFound") {
-				fmt.Printf("Warning: parameter not found for %s, skipping.\n", envKey)
+				fmt.Fprintf(warnings, "Warning: parameter not found for %s, skipping.\n", envKey)
 				continue
 			}
 			// For other errors, fail without exposing the path
@@ -613,153 +515,6 @@ func pushParameters(ctx context.Context, client *ssm.Client, envVars map[string]
 	}
 
 	return nil
-}
-
-// Difference represents a parameter that differs between local and SSM
-type Difference struct {
-	Key       string
-	LocalVal  string
-	SSMVal    string
-	SSMPath   string
-	ExistsSSM bool
-}
-
-// syncParameters compares local .env with SSM values and updates the .env file
-func syncParameters(ctx context.Context, client *ssm.Client, localEnvVars map[string]string, paramMap ParameterMap, envFile string, force bool, quotes bool) error {
-	// Fetch current values from SSM
-	ssmEnvVars, err := fetchParameters(ctx, client, paramMap)
-	if err != nil {
-		return fmt.Errorf("failed to fetch SSM parameters: %w", err)
-	}
-
-	// Compare local and SSM values
-	var differences []Difference
-	for envKey, ssmPath := range paramMap {
-		localVal, localExists := localEnvVars[envKey]
-		ssmVal, ssmExists := ssmEnvVars[envKey]
-
-		// Check if there's a difference
-		if !localExists {
-			// Local doesn't have this key, but SSM does
-			if ssmExists {
-				differences = append(differences, Difference{
-					Key:       envKey,
-					LocalVal:  "",
-					SSMVal:    ssmVal,
-					SSMPath:   ssmPath,
-					ExistsSSM: true,
-				})
-			}
-		} else if !ssmExists {
-			// Local has the key but SSM doesn't - skip this
-			continue
-		} else if localVal != ssmVal {
-			// Both exist but values differ
-			differences = append(differences, Difference{
-				Key:       envKey,
-				LocalVal:  localVal,
-				SSMVal:    ssmVal,
-				SSMPath:   ssmPath,
-				ExistsSSM: true,
-			})
-		}
-	}
-
-	// If no differences found
-	if len(differences) == 0 {
-		fmt.Println("✓ All values are in sync. No updates needed.")
-		return nil
-	}
-
-	// Sort differences by key for consistent output
-	sort.Slice(differences, func(i, j int) bool {
-		return differences[i].Key < differences[j].Key
-	})
-
-	// Display differences
-	fmt.Printf("\nFound %d parameter(s) with differences:\n\n", len(differences))
-	for i, diff := range differences {
-		fmt.Printf("%d. %s\n", i+1, diff.Key)
-		if diff.LocalVal == "" {
-			fmt.Printf("   Local:  (not set)\n")
-		} else {
-			fmt.Printf("   Local:  %s\n", diff.LocalVal)
-		}
-		fmt.Printf("   SSM:    %s\n", diff.SSMVal)
-		fmt.Printf("   Path:   %s\n\n", diff.SSMPath)
-	}
-
-	// Determine which values to update
-	var toUpdate []Difference
-	if force {
-		// Force mode: update all differences
-		toUpdate = differences
-		fmt.Printf("Force mode enabled. Updating all %d parameter(s)...\n", len(toUpdate))
-	} else {
-		// Interactive mode: prompt for each difference
-		toUpdate, err = promptForUpdates(differences)
-		if err != nil {
-			return fmt.Errorf("error during prompting: %w", err)
-		}
-	}
-
-	if len(toUpdate) == 0 {
-		fmt.Println("No parameters selected for update.")
-		return nil
-	}
-
-	// Update local env vars with selected SSM values
-	for _, diff := range toUpdate {
-		localEnvVars[diff.Key] = diff.SSMVal
-	}
-
-	// Write updated values to .env file
-	err = writeEnvFile(envFile, localEnvVars, quotes)
-	if err != nil {
-		return fmt.Errorf("failed to write updated .env file: %w", err)
-	}
-
-	fmt.Printf("\n✓ Successfully updated %s with %d parameter(s) from SSM\n", envFile, len(toUpdate))
-	return nil
-}
-
-// promptForUpdates prompts the user to select which parameters to update
-func promptForUpdates(differences []Difference) ([]Difference, error) {
-	var toUpdate []Difference
-
-	for i, diff := range differences {
-		for {
-			fmt.Printf("Update %s (%d/%d)? [y]es/[n]o/[a]ll/[c]ancel: ", diff.Key, i+1, len(differences))
-
-			var response string
-			_, err := fmt.Scanln(&response)
-			if err != nil {
-				// Handle empty input
-				response = ""
-			}
-
-			response = strings.ToLower(strings.TrimSpace(response))
-
-			switch response {
-			case "y", "yes":
-				toUpdate = append(toUpdate, diff)
-				goto nextDiff
-			case "n", "no":
-				goto nextDiff
-			case "a", "all":
-				// Add current and all remaining differences
-				toUpdate = append(toUpdate, differences[i:]...)
-				return toUpdate, nil
-			case "c", "cancel":
-				return toUpdate, nil
-			default:
-				fmt.Println("Invalid input. Please enter y(es), n(o), a(ll), or c(ancel).")
-			}
-		}
-	nextDiff:
-	}
-
-	return toUpdate, nil
 }
 
 func main() {
@@ -928,13 +683,11 @@ func main() {
 				os.Exit(1)
 			}
 
-			localEnvVars, err := readEnvFile(*envFile)
-			if err != nil {
-				fmt.Printf("Error reading .env file: %v\n", err)
-				os.Exit(1)
+			fetch := func(ctx context.Context, mapping ParameterMap) (map[string]string, error) {
+				return fetchParametersFromAzure(ctx, azureClient, mapping, io.Discard)
 			}
-
-			err = syncParametersWithAzure(ctx, azureClient, localEnvVars, paramMap, *envFile, *force, *quotes)
+			options := syncOptions{envFile: *envFile, force: *force, quotes: *quotes}
+			err = runSync(ctx, fetch, paramMap, options, os.Stdin, os.Stdout)
 			if err != nil {
 				fmt.Printf("Error syncing secrets: %v\n", err)
 				os.Exit(1)
@@ -954,7 +707,7 @@ func main() {
 			}
 
 			// Fetch secrets from Azure
-			envVars, err := fetchParametersFromAzure(ctx, azureClient, paramMap)
+			envVars, err := fetchParametersFromAzure(ctx, azureClient, paramMap, os.Stdout)
 			if err != nil {
 				fmt.Printf("Error fetching secrets: %v\n", err)
 				os.Exit(1)
@@ -1031,13 +784,11 @@ func main() {
 			os.Exit(1)
 		}
 
-		localEnvVars, err := readEnvFile(*envFile)
-		if err != nil {
-			fmt.Printf("Error reading .env file: %v\n", err)
-			os.Exit(1)
+		fetch := func(ctx context.Context, mapping ParameterMap) (map[string]string, error) {
+			return fetchParameters(ctx, ssmClient, mapping, io.Discard)
 		}
-
-		err = syncParameters(ctx, ssmClient, localEnvVars, paramMap, *envFile, *force, *quotes)
+		options := syncOptions{envFile: *envFile, force: *force, quotes: *quotes}
+		err = runSync(ctx, fetch, paramMap, options, os.Stdin, os.Stdout)
 		if err != nil {
 			fmt.Printf("Error syncing parameters: %v\n", err)
 			os.Exit(1)
@@ -1050,7 +801,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		envVars, err := fetchParameters(ctx, ssmClient, paramMap)
+		envVars, err := fetchParameters(ctx, ssmClient, paramMap, os.Stdout)
 		if err != nil {
 			fmt.Printf("Error fetching parameters: %v\n", err)
 			os.Exit(1)
