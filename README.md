@@ -353,22 +353,22 @@ envchanter --sync --map envchanter.prod.json --env .env
 When differences are found, you'll see output like:
 
 ```
-Found 2 parameter(s) with differences:
+Found 2 value(s) with differences:
 
-1. DB_PASSWORD
-   Local:  old_password
-   SSM:    new_password
-   Path:   /app001/test/db-password
-
-2. API_KEY
+1. API_KEY
    Local:  old_key
-   SSM:    new_key
-   Path:   /app001/test/api-key
+   Remote: new_key
+   Reference: /app001/test/api-key
 
-Update DB_PASSWORD (1/2)? [y]es/[n]o/[a]ll/[c]ancel: y
-Update API_KEY (2/2)? [y]es/[n]o/[a]ll/[c]ancel: n
+2. DB_PASSWORD
+   Local:  old_password
+   Remote: new_password
+   Reference: /app001/test/db-password
 
-✓ Successfully updated .env with 1 parameter(s) from SSM
+Update API_KEY (1/2)? [y]es/[n]o/[a]ll/[c]ancel: y
+Update DB_PASSWORD (2/2)? [y]es/[n]o/[a]ll/[c]ancel: n
+
+✓ Successfully updated .env with 1 remote value(s)
 ```
 
 **Interactive Options:**
@@ -376,7 +376,7 @@ Update API_KEY (2/2)? [y]es/[n]o/[a]ll/[c]ancel: n
 - `y` or `yes` - Update this parameter
 - `n` or `no` - Skip this parameter
 - `a` or `all` - Update this and all remaining parameters
-- `c` or `cancel` - Cancel and exit without further updates
+- `c` or `cancel` - Cancel and discard all selections
 
 #### Force Sync Mode
 
@@ -386,7 +386,7 @@ Use the `--force` flag to automatically update all differing values without prom
 envchanter --sync --force --map envchanter.prod.json --env .env
 ```
 
-This is useful for automated scripts or CI/CD pipelines where you want to ensure your local `.env` is always in sync with SSM.
+Both interactive and forced sync display local and remote values. If a mapped remote value is missing, sync warns, preserves any local value, and continues. Cancelling interactive sync or reaching the end of input before all choices are made leaves the file untouched.
 
 #### Sync Mode Examples
 
@@ -522,12 +522,12 @@ envchanter --azure --vault-name my-vault --sync --force --map envchanter.azure.j
 When differences are found, you'll see output similar to AWS SSM sync mode:
 
 ```
-Found 2 secret(s) with differences:
+Found 2 value(s) with differences:
 
 1. DB_PASSWORD
    Local:  old_password
-   Azure:  new_password
-   Name:   db-password
+   Remote: new_password
+   Reference: db-password
 
 Update DB_PASSWORD (1/2)? [y]es/[n]o/[a]ll/[c]ancel:
 ```
